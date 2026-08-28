@@ -63,11 +63,36 @@ cd "$KERNEL_DIR"
 declare -a BROKEN_PATHS=()   # 断链文件在 KERNEL_DIR 下的相对路径
 declare -a BROKEN_TARGETS=() # 它声称指向的目标（相对文件所在目录）
 
+# 本脚本只负责 vendor/ 下的厂商私有代码。有些悬空链接是构建流程自己
+# 建的挂载点，指向 $WORKSPACE 下的兄弟目录，**必须原样留着**。
+#
+# ⚠️ drivers/kernelsu 是踩过的坑，代价是连续 4 次 CI 失败：
+#    SukiSU 官方 setup.sh 建 drivers/kernelsu -> ../../KernelSU/kernel，
+#    目标在 common/ 之外。而源码缓存只存 common/，KernelSU/ 不在其中，
+#    所以缓存命中的那一刻这条链接必然悬空 —— 完美符合下面的断链判定。
+#    它会被当成 vendor 断链，由通用兜底 make_dir_stub 造出一个
+#    只含空 Kconfig/Makefile 的假 KernelSU/kernel/ 目录。
+#    接着 setup-ksu.sh 看到 KernelSU/ 存在就跳过官方 setup.sh，
+#    随即因为没有 .git 而失败。
+#
+#    首次冷跑不会暴露（无缓存），第二次起必挂。
+is_build_mount_point() {
+    case "${1#./}" in
+        drivers/kernelsu|drivers/kernelsu/*) return 0 ;;
+    esac
+    return 1
+}
+
 # --- A. 悬空的真 symlink ---
 while IFS= read -r -d '' f; do
     # -e 跟随链接：目标存在就是正常链接，跳过。
     # 这一条把内核自带的仓库内链接全部排除掉。
     [ -e "$f" ] && continue
+
+    if is_build_mount_point "$f"; then
+        skip "  跳过构建挂载点: ${f#./} -> $(readlink "$f")"
+        continue
+    fi
 
     target="$(readlink "$f")"
     [ -n "$target" ] || continue
@@ -80,6 +105,8 @@ done < <(find . -type l -not -path './.git/*' -not -path './out/*' -print0)
 while IFS= read -r -d '' f; do
     # 真 symlink 已在上一轮处理过
     [ -L "$f" ] && continue
+
+    is_build_mount_point "$f" && continue
 
     content="$(tr -d '\r\n' < "$f")"
 

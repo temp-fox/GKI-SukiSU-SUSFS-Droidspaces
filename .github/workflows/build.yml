@@ -351,12 +351,10 @@ jobs:
           echo "sha=$SHA" >> "$GITHUB_OUTPUT"
           echo "源码 commit: $SHA"
 
-      - name: 缓存内核源码
+      - name: 恢复内核源码缓存
         id: cache-source
-        uses: actions/cache@v4
+        uses: actions/cache/restore@v4
         with:
-          # 只缓存未经改动的源码树。补丁和配置每次重新应用 ——
-          # 缓存改过的树会让「改了脚本但产物没变」这类问题极难排查。
           path: kernel_workspace/common
           key: source-${{ inputs.device }}-${{ steps.source-sha.outputs.sha }}
 
@@ -382,6 +380,23 @@ jobs:
 
       - name: 获取内核源码
         run: bash scripts/prepare-source.sh
+
+      # 紧接着下载后就保存，此刻源码树还是干净的。
+      #
+      # ⚠️ 原先用 actions/cache@v4（自带 post 阶段自动保存），但那是在 job
+      #    结束时保存的 —— 那时树上已经打了 SukiSU / SUSFS / Droidspaces
+      #    全套补丁，与注释声称的「只缓存未经改动的源码树」正好相反。
+      #    最先炸出来的表现是 drivers/kernelsu：它是 setup.sh 建的、指向
+      #    common/ 之外的符号链接，被存进缓存后必然悬空，下次运行时
+      #    被 prepare-vendor-stubs.sh 当成 vendor 断链兜底成空目录，
+      #    导致 SukiSU 集成失败（run 5-8 连挂四次）。
+      #    改成 restore + 此处 save，缓存内容与注释的意图才真正一致。
+      - name: 保存内核源码缓存
+        if: steps.cache-source.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: kernel_workspace/common
+          key: source-${{ inputs.device }}-${{ steps.source-sha.outputs.sha }}
 
       - name: 补齐 vendor 占位
         run: bash scripts/prepare-vendor-stubs.sh

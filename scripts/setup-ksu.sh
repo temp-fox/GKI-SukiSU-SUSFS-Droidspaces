@@ -46,9 +46,25 @@ section "集成 SukiSU-Ultra （ref: $KSU_REF）"
 
 SETUP_URL="https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/main/kernel/setup.sh"
 
-if [ -d KernelSU ]; then
-    skip "KernelSU/ 已存在，跳过 setup.sh"
+# 判定「已装好」的依据是 .git 存在，而不是目录存在。
+#
+# ⚠️ 只判目录存在会被空壳骗过，代价是连续 4 次 CI 失败：
+#    源码缓存只存 common/，而 setup.sh 建的 drivers/kernelsu 指向
+#    common/ 之外的 KernelSU/kernel。缓存命中时这条链接必然悬空，
+#    曾被 prepare-vendor-stubs.sh 当成 vendor 断链，兜底造出一个
+#    空的 KernelSU/kernel/ 目录 —— 于是这里认为「已存在」而跳过安装，
+#    紧接着就因为没有 .git 而 die。
+#    根因已在 prepare-vendor-stubs.sh 侧修掉，这里做第二道防线：
+#    任何原因留下的残缺 KernelSU/ 都清掉重装，而不是直接失败。
+if [ -d KernelSU/.git ]; then
+    skip "KernelSU/ 已存在且含 .git，跳过 setup.sh"
 else
+    if [ -e KernelSU ]; then
+        warn "KernelSU/ 存在但没有 .git —— 是个残缺目录，清掉重装"
+        warn "  （若反复出现，检查是否有步骤误把它当成断链占位处理了）"
+        rm -rf KernelSU
+    fi
+
     log "下载并执行官方 setup.sh"
     # 先下载到本地再执行，而不是 curl | bash 直接管道 ——
     # 这样失败时能看到脚本内容，也能在日志里留档。
@@ -56,12 +72,21 @@ else
         || die "无法下载 SukiSU setup.sh"
     [ -s /tmp/ksu-setup.sh ] || die "下载到的 setup.sh 是空文件"
 
+    # setup.sh 会 `ln -sf` 覆盖 drivers/kernelsu，不需要我们预先清理。
     bash /tmp/ksu-setup.sh "$KSU_REF" \
         || die "SukiSU setup.sh 执行失败（ref=$KSU_REF）"
 fi
 
 require_dir "$WORKSPACE/KernelSU" "SukiSU 源码"
-require_dir "$KERNEL_DIR/drivers/kernelsu" "setup.sh 应建立的驱动挂载点"
+
+# 挂载点必须是能解析到实际内容的链接。缓存复用场景下它可能是悬空的，
+# 或者被别的步骤改成了普通目录 —— 两种情况编译期才报错，很难回溯。
+KSU_LINK="$KERNEL_DIR/drivers/kernelsu"
+[ -e "$KSU_LINK" ] || die "drivers/kernelsu 解析不到目标。
+     它应是指向 $WORKSPACE/KernelSU/kernel 的符号链接。
+     当前状态：$(ls -ld "$KSU_LINK" 2>&1 || echo '不存在')"
+require_file "$KSU_LINK/Makefile" "SukiSU 驱动 Makefile（经 drivers/kernelsu 访问）"
+ok "drivers/kernelsu -> $(readlink "$KSU_LINK" 2>/dev/null || echo '（实体目录）')"
 
 # -----------------------------------------------------------------------------
 # 2. 修复 git 历史
