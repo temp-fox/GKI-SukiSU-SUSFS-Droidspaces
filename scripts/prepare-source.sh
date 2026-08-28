@@ -35,14 +35,24 @@ else
         # ⚠️ 前身项目在这里有 TOCTOU：先 ls-remote 记录 sha 写进产物信息，
         #    再另起一条命令下载 refs/heads/master.zip。两步之间上游若推了
         #    新 commit，产物记录的 sha 和实际编译的源码就对不上了。
+        #
+        # ⚠️ 用 vnd.github.sha 媒体类型拿裸 sha，不要 `| grep -m1 '"sha"'`：
+        #    commits API 的 JSON 带完整 files 数组（本机型约 380 KB），
+        #    而 "sha" 在开头，grep -m1 命中即关管道 → curl 吃 SIGPIPE →
+        #    exit 23 → 被本脚本开头的 pipefail 放大成硬失败。
         log "解析 ${SOURCE_REPO}@${SOURCE_REF} 的 commit sha..."
-        SOURCE_SHA="$(curl -fsSL \
+        SOURCE_SHA="$(curl -fsSL --retry 3 \
             ${GH_TOKEN:+-H "Authorization: Bearer $GH_TOKEN"} \
-            -H "Accept: application/vnd.github+json" \
-            "https://api.github.com/repos/${SOURCE_REPO}/commits/${SOURCE_REF}" \
-            | grep -m1 '"sha"' | cut -d'"' -f4)"
+            -H "Accept: application/vnd.github.sha" \
+            "https://api.github.com/repos/${SOURCE_REPO}/commits/${SOURCE_REF}")"
 
-        [ -n "$SOURCE_SHA" ] || die "无法解析 ${SOURCE_REPO}@${SOURCE_REF} 的 sha"
+        # 必须是 40 位十六进制。只判非空不够 —— 限流或仓库不存在时
+        # 返回的是 JSON 错误页，非空但完全不是 sha，会一路带到下载环节
+        # 拼出一个 404 的 zip URL，错误信息指不到根因。
+        [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]] \
+            || die "解析 ${SOURCE_REPO}@${SOURCE_REF} 的 sha 失败。
+     期望 40 位十六进制，实际返回：'${SOURCE_SHA:0:200}'
+     常见原因：仓库名或 ref 写错、仓库是私有的、API 限流。"
         ok "源码 commit: $SOURCE_SHA"
 
         ZIP_URL="https://github.com/${SOURCE_REPO}/archive/${SOURCE_SHA}.zip"

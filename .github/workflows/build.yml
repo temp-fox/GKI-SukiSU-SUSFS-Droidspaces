@@ -314,12 +314,19 @@ jobs:
         run: |
           set -euo pipefail
           if [ "$SOURCE_TYPE" = "github-zip" ] || [ "$SOURCE_TYPE" = "git" ]; then
-            SHA=$(curl -fsSL \
+            # 用 vnd.github.sha 媒体类型，响应体就是 40 字节的裸 sha。
+            #
+            # ⚠️ 不要写成 `curl ... | grep -m1 '"sha"'`：commits API 的 JSON
+            #    响应带完整 files 数组（本机型约 380 KB），而 "sha" 在开头，
+            #    grep -m1 命中即关闭管道 → curl 收到 SIGPIPE → exit 23 →
+            #    被 pipefail 放大成整步失败。sha 其实已经取到了，纯粹死于退出码。
+            SHA=$(curl -fsSL --retry 3 \
                   -H "Authorization: Bearer ${{ github.token }}" \
-                  -H "Accept: application/vnd.github+json" \
-                  "https://api.github.com/repos/${SOURCE_REPO}/commits/${SOURCE_REF}" \
-                  | grep -m1 '"sha"' | cut -d'"' -f4)
-            [ -n "$SHA" ] || { echo "::error::无法解析源码 commit"; exit 1; }
+                  -H "Accept: application/vnd.github.sha" \
+                  "https://api.github.com/repos/${SOURCE_REPO}/commits/${SOURCE_REF}")
+            # 必须是 40 位十六进制，否则说明拿到的是错误页而不是 sha
+            [[ "$SHA" =~ ^[0-9a-f]{40}$ ]] \
+              || { echo "::error::无法解析源码 commit（返回值：'${SHA:0:200}'）"; exit 1; }
           else
             SHA="${SOURCE_MANIFEST_BRANCH}"
           fi
