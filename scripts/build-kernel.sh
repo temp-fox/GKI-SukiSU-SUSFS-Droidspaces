@@ -153,10 +153,11 @@ IMAGE_SIZE=$(stat -c%s "$IMAGE")
 IMAGE_MB=$(( IMAGE_SIZE / 1024 / 1024 ))
 log "Image 体积: ${IMAGE_MB} MB （${IMAGE_SIZE} 字节）"
 
-# GKI 内核正常在 40-70 MB。明显偏小说明编译出来的东西不对，
+# GKI 的 arm64 Image 本身是自解压的压缩镜像，实测 30-40 MB
+# （本机型 34 MB）。明显偏小说明编译出来的东西不对，
 # 比如某个 config 意外关掉了一大块功能。
 [ "$IMAGE_MB" -ge 20 ] || die "Image 只有 ${IMAGE_MB} MB，明显异常。
-     GKI 内核正常应在 40 MB 以上。检查 .config 是否被意外精简。"
+     GKI 内核正常应在 30 MB 以上。检查 .config 是否被意外精简。"
 
 # 从 Image 里读版本串 —— 这是验证版本伪装是否生效的最直接方式
 VERSION_STR="$(strings "$IMAGE" | grep -m1 'Linux version' || true)"
