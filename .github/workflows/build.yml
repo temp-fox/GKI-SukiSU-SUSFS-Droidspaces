@@ -1,0 +1,480 @@
+# =============================================================================
+# 核心构建引擎
+#
+# 双入口：
+#   workflow_dispatch  在 Actions 页面手动运行
+#   workflow_call      被其他 workflow 复用（如批量构建多机型）
+#
+# 所有实际逻辑都在 scripts/ 下的脚本里，这个文件只负责编排。
+# 这样脚本可以在本地单独跑，也便于逐个调试。
+# =============================================================================
+
+name: 构建内核
+
+permissions:
+  contents: read
+  actions: write
+
+on:
+  workflow_dispatch:
+    inputs:
+      device:
+        description: '目标设备（读取 devices/<设备>.env）'
+        required: true
+        type: choice
+        default: 'rmx5062'
+        options:
+          - 'rmx5062'
+
+      ksu_ref:
+        description: 'SukiSU-Ultra 分支/tag/commit。⚠️ 开 SUSFS 时必须用含 SUSFS 的分支（builtin）'
+        required: false
+        type: string
+        default: 'builtin'
+
+      ksu_version_override:
+        description: '手工指定 KSU_VERSION（留空自动推导）。用于匹配特定版本的管理器 APK'
+        required: false
+        type: string
+        default: ''
+
+      enable_susfs:
+        description: '启用 SUSFS（挂载与文件隐藏）'
+        required: false
+        type: boolean
+        default: true
+
+      susfs_ref:
+        description: 'susfs4ksu 的 commit（留空用分支最新）。钉死版本可复现历史构建'
+        required: false
+        type: string
+        default: ''
+
+      enable_droidspaces:
+        description: '启用 Droidspaces 容器支持'
+        required: false
+        type: boolean
+        default: true
+
+      kabi_slots:
+        description: 'kABI 槽位。auto = 用设备配置的默认值。⚠️ 选错会导致刷机后 bootloop'
+        required: false
+        type: choice
+        default: 'auto'
+        options:
+          - 'auto'
+          - '6_7_8'
+          - '3_4_5'
+          - '1_2_3'
+
+      enable_kpm:
+        description: '启用 KPM（SukiSU 内核补丁模块框架）'
+        required: false
+        type: boolean
+        default: true
+
+      enable_network_ext:
+        description: '启用网络功能扩展（ipset / 高级 iptables，容器跑 Docker/UFW 需要）'
+        required: false
+        type: boolean
+        default: true
+
+      enable_zram:
+        description: '启用 zram 内存压缩（对跑容器的机器有利）'
+        required: false
+        type: boolean
+        default: true
+
+      enable_rekernel:
+        description: '启用 Re-Kernel（改善后台进程冻结行为）'
+        required: false
+        type: boolean
+        default: true
+
+      enable_bbr:
+        description: '编入 BBR 拥塞控制算法（默认算法仍是 cubic）'
+        required: false
+        type: boolean
+        default: false
+
+      bbr_as_default:
+        description: '把 BBR 设为默认拥塞控制算法（需同时开启 enable_bbr）'
+        required: false
+        type: boolean
+        default: false
+
+      enable_ntsync:
+        description: '启用 NTsync（Winlator 需要）。⚠️ 会把 /dev/ntsync 开放给所有 App'
+        required: false
+        type: boolean
+        default: false
+
+      enable_bbg:
+        description: '启用基带保护 BBG（防误刷变砖）'
+        required: false
+        type: boolean
+        default: false
+
+      kernel_suffix:
+        description: '自定义内核后缀（留空用设备配置的值，即伪装成原厂）'
+        required: false
+        type: string
+        default: ''
+
+      output_boot_img:
+        description: '同时产出 boot.img'
+        required: false
+        type: boolean
+        default: true
+
+      ccache_reset:
+        description: '丢弃 ccache，强制冷编译'
+        required: false
+        type: boolean
+        default: false
+
+  workflow_call:
+    inputs:
+      device:              { required: true,  type: string }
+      ksu_ref:             { required: false, type: string,  default: 'builtin' }
+      ksu_version_override: { required: false, type: string,  default: '' }
+      enable_susfs:        { required: false, type: boolean, default: true }
+      susfs_ref:           { required: false, type: string,  default: '' }
+      enable_droidspaces:  { required: false, type: boolean, default: true }
+      kabi_slots:          { required: false, type: string,  default: 'auto' }
+      enable_kpm:          { required: false, type: boolean, default: true }
+      enable_network_ext:  { required: false, type: boolean, default: true }
+      enable_zram:         { required: false, type: boolean, default: true }
+      enable_rekernel:     { required: false, type: boolean, default: true }
+      enable_bbr:          { required: false, type: boolean, default: false }
+      bbr_as_default:      { required: false, type: boolean, default: false }
+      enable_ntsync:       { required: false, type: boolean, default: false }
+      enable_bbg:          { required: false, type: boolean, default: false }
+      kernel_suffix:       { required: false, type: string,  default: '' }
+      output_boot_img:     { required: false, type: boolean, default: true }
+      ccache_reset:        { required: false, type: boolean, default: false }
+    outputs:
+      artifact_name: { value: '${{ jobs.build.outputs.artifact_name }}' }
+      ksu_version:   { value: '${{ jobs.build.outputs.ksu_version }}' }
+      susfs_version: { value: '${{ jobs.build.outputs.susfs_version }}' }
+
+jobs:
+  build:
+    name: '${{ inputs.device }}'
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+
+    outputs:
+      artifact_name: ${{ steps.package.outputs.artifact_name }}
+      ksu_version:   ${{ steps.ksu.outputs.ksu_version }}
+      susfs_version: ${{ steps.susfs.outputs.susfs_version }}
+
+    env:
+      TZ: Asia/Shanghai
+      WORKSPACE: ${{ github.workspace }}/kernel_workspace
+      REPO_ROOT: ${{ github.workspace }}
+
+      # 把所有开关归一化成 true/false 字符串。
+      # workflow_dispatch 传字符串、workflow_call 传布尔，
+      # 在这里统一，脚本侧就不用各自处理两种形态。
+      KSU_REF:              ${{ inputs.ksu_ref }}
+      KSU_VERSION_OVERRIDE: ${{ inputs.ksu_version_override }}
+      SUSFS_REF:            ${{ inputs.susfs_ref }}
+      KERNEL_SUFFIX:        ${{ inputs.kernel_suffix }}
+      ENABLE_KSU:           'true'
+      ENABLE_SUSFS:         ${{ inputs.enable_susfs }}
+      ENABLE_DROIDSPACES:   ${{ inputs.enable_droidspaces }}
+      ENABLE_KPM:           ${{ inputs.enable_kpm }}
+      ENABLE_NETWORK_EXT:   ${{ inputs.enable_network_ext }}
+      ENABLE_ZRAM:          ${{ inputs.enable_zram }}
+      ENABLE_REKERNEL:      ${{ inputs.enable_rekernel }}
+      ENABLE_BBR:           ${{ inputs.enable_bbr }}
+      BBR_AS_DEFAULT:       ${{ inputs.bbr_as_default }}
+      ENABLE_NTSYNC:        ${{ inputs.enable_ntsync }}
+      ENABLE_BBG:           ${{ inputs.enable_bbg }}
+      OUTPUT_BOOT_IMG:      ${{ inputs.output_boot_img }}
+
+    steps:
+      # =======================================================================
+      # 准备
+      # =======================================================================
+
+      - name: 清理磁盘空间
+        # runner 只有约 14 GB 可用，而源码 2 GB + 工具链 2 GB + 编译产物
+        # 很容易撑爆。这一步能腾出 20 GB 以上。
+        uses: endersonmenezes/free-disk-space@v3
+        with:
+          remove_android: true
+          remove_dotnet: true
+          remove_haskell: true
+          remove_tool_cache: true
+          remove_swap: false
+          remove_packages: "azure-cli google-cloud-cli microsoft-edge-stable google-chrome-stable firefox postgresql* temurin-* mysql* dotnet-sdk-*"
+          remove_packages_one_command: true
+          remove_folders: "/usr/share/swift /usr/share/miniconda /usr/local/lib/node_modules /usr/local/share/chromium /usr/local/julia /usr/share/gradle"
+          rm_cmd: "rmz"
+          rmz_version: "3.1.1"
+          testing: false
+
+      - name: 检出构建器仓库
+        uses: actions/checkout@v4
+
+      - name: 安装依赖
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            aria2 bc binutils bison build-essential ccache curl flex git \
+            libelf-dev libssl-dev lz4 pahole dwarves python-is-python3 \
+            python3 unzip zip zstd
+
+      - name: 加载设备配置
+        id: device
+        run: |
+          set -euo pipefail
+          . scripts/lib/common.sh
+          load_device "${{ inputs.device }}"
+
+          # 设备配置里的所有变量都要传给后续 step。
+          # 用 GITHUB_ENV 而不是 outputs，因为项目多、且后续脚本直接读环境变量。
+          for k in DEVICE_CODE DEVICE_NAME DEVICE_BOARD DEVICE_FIRMWARE \
+                   DEVICE_VENDOR SOURCE_TYPE SOURCE_REPO SOURCE_REF \
+                   SOURCE_MANIFEST_BRANCH SOURCE_UNZIP_DIR \
+                   ANDROID_VERSION KERNEL_VERSION KERNEL_SUBLEVEL \
+                   KMI_GENERATION KERNEL_LOCALVERSION FAKE_BUILD_TIME \
+                   NEEDS_VENDOR_STUBS NEEDS_OPLUS_MIDAS_FIX \
+                   DEFAULT_KABI_SLOTS CLANG_VERSION TOOLCHAIN_URL \
+                   BUILD_TOOLS_URL EXTRA_CONFIG_FRAGMENTS; do
+            printf '%s=%s\n' "$k" "${!k:-}" >> "$GITHUB_ENV"
+          done
+
+          # kABI 槽位：workflow 输入优先，'auto' 则用设备配置的默认值
+          SLOTS="${{ inputs.kabi_slots }}"
+          if [ -z "$SLOTS" ] || [ "$SLOTS" = "auto" ]; then
+            SLOTS="${DEFAULT_KABI_SLOTS:-6_7_8}"
+            echo "kABI 槽位: $SLOTS （来自设备配置）"
+          else
+            echo "kABI 槽位: $SLOTS （workflow 输入覆盖）"
+          fi
+          echo "KABI_SLOTS=$SLOTS" >> "$GITHUB_ENV"
+
+          # 特性 hash：让不同开关组合各有独立的 ccache
+          FEATURE_HASH=$(printf '%s|%s|%s|%s|%s|%s|%s|%s|%s' \
+            "${{ inputs.ksu_ref }}" "${{ inputs.enable_susfs }}" \
+            "${{ inputs.enable_droidspaces }}" "$SLOTS" \
+            "${{ inputs.enable_kpm }}" "${{ inputs.enable_network_ext }}" \
+            "${{ inputs.enable_zram }}" "${{ inputs.enable_rekernel }}" \
+            "${{ inputs.enable_ntsync }}" | sha256sum | cut -c1-12)
+          echo "FEATURE_HASH=$FEATURE_HASH" >> "$GITHUB_ENV"
+
+      - name: 构建配置摘要
+        run: |
+          cat <<EOF
+          ================================================================
+           构建配置
+          ================================================================
+            设备          : $DEVICE_NAME ($DEVICE_CODE)
+            内核          : $KERNEL_VERSION.$KERNEL_SUBLEVEL-$ANDROID_VERSION
+            源码          : $SOURCE_REPO @ $SOURCE_REF
+            SukiSU        : ${{ inputs.ksu_ref }}
+            SUSFS         : ${{ inputs.enable_susfs }}${{ inputs.susfs_ref && format(' @ {0}', inputs.susfs_ref) || '' }}
+            Droidspaces   : ${{ inputs.enable_droidspaces }} (kABI 槽位 $KABI_SLOTS)
+            KPM           : ${{ inputs.enable_kpm }}
+            网络扩展      : ${{ inputs.enable_network_ext }}
+            zram          : ${{ inputs.enable_zram }}
+            Re-Kernel     : ${{ inputs.enable_rekernel }}
+            BBR           : ${{ inputs.enable_bbr }}
+            NTsync        : ${{ inputs.enable_ntsync }}
+            BBG           : ${{ inputs.enable_bbg }}
+            特性 hash     : $FEATURE_HASH
+          ================================================================
+          EOF
+
+      # =======================================================================
+      # 缓存
+      #
+      # 三层缓存，命中率与正确性的权衡各不相同：
+      #   源码   按 commit sha，内容确定，可放心长期复用
+      #   工具链 按 URL hash，同理
+      #   ccache 滚动 key，每次 miss 后 save，restore-keys 拿上一次的
+      # =======================================================================
+
+      - name: 缓存工具链
+        id: cache-toolchain
+        uses: actions/cache@v4
+        with:
+          path: |
+            kernel_workspace/clang
+            kernel_workspace/build-tools
+            kernel_workspace/mkbootimg
+            kernel_workspace/kernel-build-tools
+          key: toolchain-v2-${{ hashFiles('scripts/prepare-toolchain.sh') }}
+
+      - name: 解析源码 commit
+        id: source-sha
+        run: |
+          set -euo pipefail
+          if [ "$SOURCE_TYPE" = "github-zip" ] || [ "$SOURCE_TYPE" = "git" ]; then
+            SHA=$(curl -fsSL \
+                  -H "Authorization: Bearer ${{ github.token }}" \
+                  -H "Accept: application/vnd.github+json" \
+                  "https://api.github.com/repos/${SOURCE_REPO}/commits/${SOURCE_REF}" \
+                  | grep -m1 '"sha"' | cut -d'"' -f4)
+            [ -n "$SHA" ] || { echo "::error::无法解析源码 commit"; exit 1; }
+          else
+            SHA="${SOURCE_MANIFEST_BRANCH}"
+          fi
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+          echo "源码 commit: $SHA"
+
+      - name: 缓存内核源码
+        id: cache-source
+        uses: actions/cache@v4
+        with:
+          # 只缓存未经改动的源码树。补丁和配置每次重新应用 ——
+          # 缓存改过的树会让「改了脚本但产物没变」这类问题极难排查。
+          path: kernel_workspace/common
+          key: source-${{ inputs.device }}-${{ steps.source-sha.outputs.sha }}
+
+      - name: 恢复 ccache
+        if: ${{ !inputs.ccache_reset }}
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/.ccache
+          # key 带 run_id 保证必然 miss → 结束时触发 save；
+          # restore-keys 前缀匹配拿到上一次的缓存。
+          # 这是 Actions cache 做「滚动更新」的标准写法。
+          key: ccache-${{ inputs.device }}-${{ env.FEATURE_HASH }}-${{ github.run_id }}
+          restore-keys: |
+            ccache-${{ inputs.device }}-${{ env.FEATURE_HASH }}-
+            ccache-${{ inputs.device }}-
+
+      # =======================================================================
+      # 构建流水线
+      # =======================================================================
+
+      - name: 准备工具链
+        run: bash scripts/prepare-toolchain.sh
+
+      - name: 获取内核源码
+        run: bash scripts/prepare-source.sh
+
+      - name: 补齐 vendor 占位
+        run: bash scripts/prepare-vendor-stubs.sh
+
+      - name: 集成 SukiSU-Ultra
+        id: ksu
+        run: bash scripts/setup-ksu.sh
+
+      - name: 集成 SUSFS
+        id: susfs
+        if: inputs.enable_susfs
+        run: bash scripts/setup-susfs.sh
+
+      - name: 应用 defconfig
+        run: bash scripts/apply-defconfig.sh
+
+      - name: 集成 Droidspaces
+        if: inputs.enable_droidspaces
+        run: bash scripts/setup-droidspaces.sh
+
+      - name: 可选特性
+        run: bash scripts/setup-optional.sh
+
+      - name: 编译内核
+        run: bash scripts/build-kernel.sh
+
+      - name: 打包产物
+        id: package
+        run: bash scripts/package.sh
+
+      # =======================================================================
+      # 保存与上传
+      # =======================================================================
+
+      - name: 保存 ccache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: ~/.ccache
+          key: ccache-${{ inputs.device }}-${{ env.FEATURE_HASH }}-${{ github.run_id }}
+
+      - name: 上传刷机包
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.package.outputs.artifact_name }}
+          path: |
+            kernel_workspace/artifacts/*.zip
+            kernel_workspace/artifacts/*.img
+            kernel_workspace/artifacts/build-info.txt
+          if-no-files-found: error
+          compression-level: 6
+          retention-days: 30
+
+      - name: 上传补丁冲突文件
+        # 有 .rej 说明补丁没干净应用。这是排查的第一手材料，
+        # 即使构建失败也要传上来。
+        if: always() && env.REJ_COUNT != '0' && env.REJ_COUNT != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.device }}-patch-rejects
+          path: kernel_workspace/artifacts/patch-rejects/
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: 收集失败诊断信息
+        if: failure()
+        run: |
+          DIAG="$GITHUB_WORKSPACE/diagnostics"
+          mkdir -p "$DIAG"
+
+          # 最终 .config —— 排查「某个选项为什么没生效」的必需品
+          cp "$WORKSPACE/common/out/.config" "$DIAG/final.config" 2>/dev/null || true
+
+          # defconfig 的前后对比，看清我们到底改了什么
+          if [ -f "$WORKSPACE/common/arch/arm64/configs/gki_defconfig.orig" ]; then
+            diff "$WORKSPACE/common/arch/arm64/configs/gki_defconfig.orig" \
+                 "$WORKSPACE/common/arch/arm64/configs/gki_defconfig" \
+                 > "$DIAG/defconfig.diff" 2>/dev/null || true
+          fi
+
+          # kABI 注入结果 —— bootloop 类问题看这个
+          if [ -f "$WORKSPACE/common/include/linux/sched.h" ]; then
+            grep -n -A25 'ANDROID_KABI_USE(1' \
+                 "$WORKSPACE/common/include/linux/sched.h" \
+                 > "$DIAG/sched_h_kabi.txt" 2>/dev/null || true
+          fi
+
+          find "$WORKSPACE/common" -name '*.rej' -type f > "$DIAG/rej-list.txt" 2>/dev/null || true
+          df -h > "$DIAG/disk.txt" 2>&1 || true
+          ccache -s > "$DIAG/ccache.txt" 2>&1 || true
+
+      - name: 上传诊断信息
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.device }}-diagnostics
+          path: diagnostics/
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: 构建结果摘要
+        if: always()
+        run: |
+          {
+            echo "## 构建结果"
+            echo
+            echo "| 项 | 值 |"
+            echo "|---|---|"
+            echo "| 设备 | ${DEVICE_NAME:-?} (${DEVICE_CODE:-?}) |"
+            echo "| 内核 | ${KERNEL_VERSION:-?}.${ACTUAL_SUBLEVEL:-?}-${ANDROID_VERSION:-?} |"
+            echo "| 源码 | \`${SOURCE_SHA:0:8}\` |"
+            echo "| SukiSU | ${KSU_REF_RESOLVED:-?} \`${KSU_SHORT:-?}\` (版本号 ${KSU_VERSION:-未启用}) |"
+            echo "| SUSFS | ${SUSFS_VERSION:-未启用} |"
+            echo "| Droidspaces | ${{ inputs.enable_droidspaces }} (kABI ${KABI_SLOTS:-?}) |"
+            echo "| 版本串 | \`${KERNEL_VERSION_STRING:-未知}\` |"
+            echo "| 补丁冲突 | ${REJ_COUNT:-0} |"
+            echo
+            if [ "${REJ_COUNT:-0}" != "0" ]; then
+              echo "> ⚠️ 有补丁冲突，产物可能不完整。请下载 patch-rejects 产物查看。"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -1,0 +1,97 @@
+# 定期清理旧的 artifact 和 cache，避免占满仓库配额。
+#
+# GitHub 的免费配额：artifact 与 cache 共享 10 GB（私有仓库），
+# 公开仓库 artifact 不计费但 cache 仍有 10 GB 上限。
+# 内核构建产物每个几百 MB、ccache 每份几 GB，很快就会撑满，
+# 满了之后新的 cache 保存会静默失败，导致每次都冷编译。
+
+name: 清理旧产物
+
+permissions:
+  actions: write
+  contents: read
+
+on:
+  schedule:
+    # 每周日凌晨 3:17（UTC）。避开整点，减少与其他人的定时任务撞车。
+    - cron: '17 3 * * 0'
+  workflow_dispatch:
+    inputs:
+      keep_days:
+        description: '保留最近多少天的产物'
+        required: false
+        type: string
+        default: '30'
+      clean_cache:
+        description: '同时清理构建缓存（下次构建会变慢）'
+        required: false
+        type: boolean
+        default: false
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 清理过期 artifact
+        uses: actions/github-script@v7
+        env:
+          KEEP_DAYS: ${{ inputs.keep_days || '30' }}
+        with:
+          script: |
+            const keepDays = parseInt(process.env.KEEP_DAYS, 10) || 30;
+            const cutoff = Date.now() - keepDays * 24 * 60 * 60 * 1000;
+
+            const artifacts = await github.paginate(
+              github.rest.actions.listArtifactsForRepo,
+              { owner: context.repo.owner, repo: context.repo.repo, per_page: 100 }
+            );
+
+            let deleted = 0, freed = 0;
+            for (const a of artifacts) {
+              if (new Date(a.created_at).getTime() >= cutoff) continue;
+              try {
+                await github.rest.actions.deleteArtifact({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  artifact_id: a.id,
+                });
+                deleted++;
+                freed += a.size_in_bytes;
+                console.log(`已删除: ${a.name} (${(a.size_in_bytes / 1048576).toFixed(1)} MB)`);
+              } catch (e) {
+                console.log(`删除失败 ${a.name}: ${e.message}`);
+              }
+            }
+            const summary = `清理了 ${deleted} 个过期 artifact，释放 ${(freed / 1073741824).toFixed(2)} GB`;
+            console.log(summary);
+            await core.summary.addRaw(`## Artifact 清理\n\n${summary}\n`).write();
+
+      - name: 清理构建缓存
+        if: inputs.clean_cache
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const caches = await github.paginate(
+              github.rest.actions.getActionsCacheList,
+              { owner: context.repo.owner, repo: context.repo.repo, per_page: 100 }
+            );
+
+            let deleted = 0, freed = 0;
+            for (const c of caches) {
+              try {
+                await github.rest.actions.deleteActionsCacheById({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  cache_id: c.id,
+                });
+                deleted++;
+                freed += c.size_in_bytes;
+                console.log(`已删除缓存: ${c.key}`);
+              } catch (e) {
+                console.log(`删除失败 ${c.key}: ${e.message}`);
+              }
+            }
+            const summary = `清理了 ${deleted} 份缓存，释放 ${(freed / 1073741824).toFixed(2)} GB\n\n` +
+                            `下次构建会是冷编译，耗时明显增加。`;
+            console.log(summary);
+            await core.summary.addRaw(`## 缓存清理\n\n${summary}\n`).write();

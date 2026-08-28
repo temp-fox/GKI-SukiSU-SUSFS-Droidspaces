@@ -1,0 +1,119 @@
+Subject: kernel/pid.c: find_task_by_vpid 查不到时为 oplus_bsp_midas 返回哨兵任务
+
+来源：fatalcoder524 (Droidspaces-OSS 生态)
+适用：OPPO / 一加 / realme 机型 + 启用 Droidspaces 容器
+
+【问题】
+OPPO 的功耗统计模块 oplus_bsp_midas 调用 find_task_by_vpid() 后
+不判空就直接解引用返回值。
+
+正常使用时几乎不触发 —— 它查的都是当前 namespace 里存在的进程。
+但一旦启用 PID namespace 跑容器，大量进程处于独立的 PID namespace 中，
+从 init namespace 视角用 vpid 去查必然大面积落空 → 空指针解引用 → 开机 panic。
+
+【修复】
+在 find_task_by_vpid() 里，只有当查询结果为 NULL 时，才用
+__module_address(_RET_IP_) 反查调用者所属模块。如果调用方正是
+oplus_bsp_midas，返回一个预先构造好的哨兵任务而非 NULL。
+
+哨兵任务由 init_task 拷贝而来（保证所有字段都是合法值），
+comm 设为 "ghost-task-sentinel" 便于在日志里辨认，
+pid/tgid 设为 -1 保证不会与真实进程混淆，
+usage 计数设成一个大值，避免被误当作可回收对象释放掉。
+
+对其他调用方零影响：非该模块的调用仍然原样返回 NULL。
+
+【上下文核实】
+已对照 realme RMX5062 官方源码逐个 hunk 确认：
+  hunk 1  kernel/pid.c:44-46   三个 include 上下文一致
+                               （注：uapi/linux/pidfd.h 在 6.1 中确实存在）
+  hunk 2  kernel/pid.c:85-89   EXPORT_SYMBOL_GPL(init_pid_ns) 后的注释块一致
+  hunk 3  kernel/pid.c:420-424 find_task_by_vpid 函数体一致
+  hunk 4  kernel/pid.c:651-654 pid_idr_init 开头一致
+
+diff --git a/kernel/pid.c b/kernel/pid.c
+--- a/kernel/pid.c
++++ b/kernel/pid.c
+@@ -43,6 +43,9 @@
+ #include <linux/idr.h>
+ #include <net/sock.h>
+ #include <uapi/linux/pidfd.h>
++#include <linux/version.h>
++#include <linux/refcount.h>
++#include <linux/module.h>
+
+ struct pid init_struct_pid = {
+ 	.count		= REFCOUNT_INIT(1),
+@@ -85,6 +88,33 @@ struct pid_namespace init_pid_ns = {
+ };
+ EXPORT_SYMBOL_GPL(init_pid_ns);
+
++/*
++ * 哨兵任务：给 oplus_bsp_midas 在查不到进程时兜底用。
++ * 详见本文件末尾 find_task_by_vpid() 里的说明。
++ */
++static struct task_struct ghost_task;
++static bool ghost_task_ready;
++
++/* usage 计数在不同配置下是 refcount_t 或 atomic_t，用泛型选择正确的设置函数 */
++#define set_task_usage(target, value) _Generic((target),	\
++	refcount_t: refcount_set,				\
++	atomic_t:   atomic_set					\
++)(&(target), (value))
++
++void __init init_ghost_task(void)
++{
++	memcpy(&ghost_task, &init_task, sizeof(struct task_struct));
++
++	strncpy(ghost_task.comm, "ghost-task-sentinel", TASK_COMM_LEN);
++	ghost_task.pid = -1;
++	ghost_task.tgid = -1;
++
++	/* 设一个大值，确保不会被引用计数归零后释放 */
++	set_task_usage(ghost_task.usage, 1000);
++
++	ghost_task_ready = true;
++}
++
+ /*
+  * Note: disable interrupts while the pidmap_lock is held as an
+  * interrupt might come in and do read_lock(&tasklist_lock).
+@@ -419,7 +449,29 @@ struct task_struct *find_task_by_pid_ns(pid_t nr, struct pid_namespace *ns)
+
+ struct task_struct *find_task_by_vpid(pid_t vnr)
+ {
+-	return find_task_by_pid_ns(vnr, task_active_pid_ns(current));
++	struct task_struct *task;
++	struct module *mod;
++	unsigned long caller_ip = _RET_IP_;
++
++	task = find_task_by_pid_ns(vnr, task_active_pid_ns(current));
++
++	/*
++	 * oplus_bsp_midas 拿到 NULL 后不判空直接解引用。启用 PID namespace
++	 * 跑容器时它会大面积查不到进程，导致开机 panic。
++	 * 只对这一个模块做兜底，其他调用方行为完全不变。
++	 */
++	if (unlikely(!task)) {
++		preempt_disable();
++		mod = __module_address(caller_ip);
++
++		if (mod && strcmp(mod->name, "oplus_bsp_midas") == 0) {
++			preempt_enable();
++			return ghost_task_ready ? &ghost_task : &init_task;
++		}
++		preempt_enable();
++	}
++
++	return task;
+ }
+ EXPORT_SYMBOL_GPL(find_task_by_vpid);
+
+@@ -650,6 +702,7 @@ SYSCALL_DEFINE2(pidfd_open, pid_t, pid, unsigned int, flags)
+
+ void __init pid_idr_init(void)
+ {
++	init_ghost_task();
+ 	/* Verify no one has done anything silly: */
+ 	BUILD_BUG_ON(PID_MAX_LIMIT >= PIDNS_ADDING);
+

@@ -1,0 +1,33 @@
+Subject: kernel/module/version.c: 模块符号 CRC 不匹配时只告警不拒绝
+
+来源：ravindu644 (Droidspaces-OSS)
+
+【为什么需要】
+Droidspaces 的 SYSVIPC kABI 修复改动了 include/linux/sched.h 的源码文本，
+这会让依赖 task_struct 的导出符号 CRC 发生变化。厂商预编译的内核模块
+（GPU / Camera / 音频）是按原 CRC 编译的，加载时会因 CRC 不匹配被拒绝。
+
+【为什么这样做是安全的】
+kABI 槽位方案的要点正是：字段被安置到 Google 预留的 padding 里，
+task_struct 的实际内存布局和成员偏移量完全没变。CRC 变化只是因为
+genksyms 看到的源码文本变了，不代表二进制接口真的不兼容。
+
+所以这里放宽的是一个「文本级」校验，不是内存安全校验。
+
+【上下文】
+已核实与 realme RMX5062 官方源码 kernel/module/version.c:51-58 完全匹配。
+
+diff --git a/kernel/module/version.c b/kernel/module/version.c
+--- a/kernel/module/version.c
++++ b/kernel/module/version.c
+@@ -51,8 +51,8 @@ int check_version(const struct load_info *info,
+ 	return 1;
+
+ bad_version:
+-	pr_warn("%s: disagrees about version of symbol %s\n", info->name, symname);
+-	return 0;
++	pr_warn("%s: disagrees about version of symbol %s, But ignore...\n", info->name, symname);
++	return 1;
+ }
+
+ int check_modstruct_version(const struct load_info *info,

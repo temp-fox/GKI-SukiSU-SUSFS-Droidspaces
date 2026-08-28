@@ -1,0 +1,21 @@
+# 保证 shell 脚本和补丁文件在任何平台检出时都用 LF 行尾。
+#
+# 这不是洁癖 —— Windows 上克隆时若被转成 CRLF：
+#   .sh  会带着 \r 传给解释器，报 "bad interpreter: /usr/bin/env bash^M"
+#   .patch 的上下文行会和源码对不上，补丁全线失败
+# 而这两类失败的报错信息都不会提到行尾，排查起来很费劲。
+
+* text=auto eol=lf
+
+*.sh    text eol=lf
+*.patch text eol=lf
+*.config text eol=lf
+*.env   text eol=lf
+*.yml   text eol=lf
+*.md    text eol=lf
+
+# 二进制文件不做任何转换
+*.zip   binary
+*.img   binary
+*.gz    binary
+*.png   binary

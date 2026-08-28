@@ -1,0 +1,41 @@
+Subject: kernel/cgroup: 在 NOPREFIX 模式下补回 "<subsys>.<file>" 别名
+
+来源：ravindu644 (Droidspaces-OSS)
+
+【问题】
+LXC / Droidspaces 在容器初始化时会在 cgroup 挂载点下按
+"<子系统名>.<文件名>" 的形式查找控制文件，例如 "memory.limit_in_bytes"。
+
+而当 cgroup 以 CGRP_ROOT_NOPREFIX 标志挂载时（Android 的
+/dev/... cgroup 挂载就是这种），内核只创建不带前缀的文件名，
+带前缀的那份别名不再生成。容器于是找不到控制文件，初始化失败。
+
+【修复】
+在 cgroup_add_file() 成功创建文件后，若同时满足
+  - 该 cftype 属于某个子系统（cft->ss 非空）
+  - 挂载时带了 CGRP_ROOT_NOPREFIX
+  - 该 cftype 没有显式声明 CFTYPE_NO_PREFIX
+则额外创建一个带子系统前缀的 kernfs 符号链接指向同一个节点。
+
+纯增量：不改变任何既有文件名，只是多加一个别名。
+
+【上下文核实】
+已对照 realme RMX5062 官方源码 kernel/cgroup/cgroup.c:4228-4239 确认一致。
+CGRP_ROOT_NOPREFIX 定义在 include/linux/cgroup-defs.h:81，
+CFTYPE_NO_PREFIX 定义在同文件 :126，两个标志在 6.1 中都存在。
+
+diff --git a/kernel/cgroup/cgroup.c b/kernel/cgroup/cgroup.c
+--- a/kernel/cgroup/cgroup.c
++++ b/kernel/cgroup/cgroup.c
+@@ -4232,6 +4232,11 @@ static int cgroup_add_file(struct cgroup_subsys_state *css, struct cgroup *cgrp,
+ 		spin_unlock_irq(&cgroup_file_kn_lock);
+ 	}
+
++	if (cft->ss && (cgrp->root->flags & CGRP_ROOT_NOPREFIX) && !(cft->flags & CFTYPE_NO_PREFIX)) {
++		snprintf(name, CGROUP_FILE_NAME_MAX, "%s.%s", cft->ss->name, cft->name);
++		kernfs_create_link(cgrp->kn, name, kn);
++	}
++
+ 	return 0;
+ }
+
