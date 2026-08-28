@@ -172,7 +172,18 @@ if is_true "${OUTPUT_BOOT_IMG:-true}"; then
                 > "$SIGN_KEY" 2>/dev/null
         fi
 
-        BOOT_PARTITION_SIZE=$(( 64 * 1024 * 1024 ))
+        # boot 分区大小。avbtool add_hash_footer 会把镜像补零填充到
+        # 这个尺寸，所以三个 boot*.img 产出后体积完全一致（各 64 MB），
+        # gz / lz4 的压缩优势在文件体积上看不出来 —— 这是 AVB 的正常
+        # 行为，不是打包出错。刷入时 bootloader 只读实际内容，不受填充影响。
+        #
+        # ⚠️ 不同机型的 boot 分区大小不同。填小了刷不进去，填大了产物虚胖。
+        #    默认 64 MB 是 android13+ GKI 的常见值，机型不同就在
+        #    devices/<机型>.env 里设 BOOT_PARTITION_SIZE 覆盖。
+        #    查本机真实值：adb shell 下
+        #      blockdev --getsize64 /dev/block/by-name/boot_a
+        BOOT_PARTITION_SIZE="${BOOT_PARTITION_SIZE:-$(( 64 * 1024 * 1024 ))}"
+        log "boot 分区大小: $(( BOOT_PARTITION_SIZE / 1024 / 1024 )) MB（镜像会被 AVB 填充到该尺寸）"
 
         make_boot() {
             local kernel="$1" suffix="$2"

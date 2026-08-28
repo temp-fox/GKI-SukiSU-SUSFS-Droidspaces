@@ -243,7 +243,8 @@ jobs:
                    KMI_GENERATION KERNEL_LOCALVERSION FAKE_BUILD_TIME \
                    NEEDS_VENDOR_STUBS NEEDS_OPLUS_MIDAS_FIX \
                    DEFAULT_KABI_SLOTS CLANG_VERSION TOOLCHAIN_URL \
-                   BUILD_TOOLS_URL EXTRA_CONFIG_FRAGMENTS; do
+                   BUILD_TOOLS_URL EXTRA_CONFIG_FRAGMENTS \
+                   BOOT_PARTITION_SIZE; do
             printf '%s=%s\n' "$k" "${!k:-}" >> "$GITHUB_ENV"
           done
 
