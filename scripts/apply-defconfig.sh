@@ -39,11 +39,23 @@ if is_true "${ENABLE_SUSFS:-false}"; then
     done < "$REPO_ROOT/config/susfs.config"
 
     # SukiSU 特有：SUS_SU 是老的 su 隐藏方式，与新的 hook 机制冲突，
-    # 上游推荐关掉，改用 KSU_MANUAL_HOOK。
+    # 上游推荐关掉。builtin 分支的 Kconfig 里没有这个符号，
+    # config_defined 会为假，这一步自然跳过。
     if config_defined CONFIG_KSU_SUSFS_SUS_SU; then
         disable_config CONFIG_KSU_SUSFS_SUS_SU
     fi
-    enable_config_if_defined CONFIG_KSU_MANUAL_HOOK
+
+    # ⚠️ 不要在这里写 CONFIG_KSU_MANUAL_HOOK。
+    #
+    # 已核实：SukiSU-Ultra 的 builtin 和 v4.1.3 两个分支的 kernel/Kconfig
+    # 都**没有定义**这个符号——builtin 走编译期内建 + LSM hook
+    # （kernel/hook/lsm_hook.c），v4.1.3 走 kprobes（depends on KPROBES）。
+    # 两条线都不存在「MANUAL_HOOK」这个开关。
+    #
+    # 该符号只在打了 susfs4ksu 的 10_enable_susfs_for_ksu.patch 的
+    # 树里才存在，而本项目用 builtin（SUSFS 已内建），刻意不打那个补丁。
+    # 写在这里 enable_config_if_defined 永远是空操作，只会误导人
+    # 以为「hook 已经配好了」。
 else
     # 显式关掉，避免 SukiSU 的 Kconfig 默认把它选上
     if config_defined CONFIG_KSU_SUSFS; then

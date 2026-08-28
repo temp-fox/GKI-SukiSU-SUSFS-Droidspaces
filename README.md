@@ -118,6 +118,21 @@ droidspaces --check           # 应显示 All required features found!
 永远返回 `unsupport`，管理器每次打开设置页都发一次注定超时的 root shell
 请求，界面就卡死了。`builtin` 分支这些都是上游原生提供的。
 
+**`CONFIG_ZRAM` / `CONFIG_ZSMALLOC` 必须保持 `=m`，绝不能改成内建。**
+官方 `gki_defconfig` 原值就是 `CONFIG_ZRAM=m`，因为原厂 zram 由 oplus 的
+vendor 模块接管（`oplus_bsp_hybridswap_zram` 等）。这套模块除了做混合交换，
+还会在 memcg 里注册 15 个私有控制文件，其中 `memory.app_uid` 是
+libprocessgroup **硬编码**要写的路径 —— Zygote fork 出每个 app 后调
+`createProcessGroup()` 写它，写不进去就 JNI FatalError → abort。
+
+编成内建（`=y`）会让这套模块加载失败，那 15 个文件全部消失。后果是
+**能正常开机，但一个 app 都打不开**（init / system_server 不是从 Zygote
+fork 的，不走这条路径，所以系统本身看着正常）。
+
+本项目早期版本踩过这个坑。实测对比：`/dev/memcg/apps/uid_*/` 下
+正常内核 46 个文件，改成 `=y` 后只剩 31 个。
+`scripts/verify-config.sh` 现在会在编译前挡住 `=y`。
+
 **关键步骤一律硬失败，不用 `|| true`。**
 打补丁失败、配置项没生效这类问题，如果被吞掉，最终会以「刷机后某个功能
 莫名不工作」的形式暴露出来，那时候排查成本高得多。宁可在构建期就红。
@@ -131,10 +146,18 @@ fuzz 能让上下文对不上的补丁「蒙混过关」，但打进去的位置
 `none` 命中率更高，但换工具链或补丁改了源码时有拿到陈旧目标文件的风险 ——
 表现是「明明改了代码，产物却没变化」，很难往回追。牺牲一点首次命中率换正确性。
 
-**不做 config_data 伪装。**
-有些项目会改写内核里的 `config_data.gz`，把某些配置项显示成关闭状态以绕过
-检测弹窗。那只改变显示、不改变实际功能，属于对抗检测的手段，对机器本身没有
-好处，还增加维护负担。本项目不做。
+**config_data 伪装是可选项，默认开启。**
+`CONFIG_IKCONFIG_PROC=y` 时内核会把编译用的 `.config` 原样嵌进镜像，
+经 `/proc/config.gz` 暴露给任何进程 —— 不需要 root 就能读到 `CONFIG_KSU=y`。
+SUSFS 在文件系统层做的隐藏，在这个口子上被整个绕过。
+
+`enable_config_spoof` 开启后，会在 `config_data` 生成之后改写它的显示内容
+（默认把 KSU / SUSFS / KPM 显示成未启用）。改的是产物副本而不是 `.config`
+本身，所以**内核功能与不开时完全一致**，只有 `/proc/config.gz` 的显示变了。
+
+要注意它的边界：这只堵 `/proc/config.gz` 一个口子，内核符号表等痕迹由
+SUSFS 的 `HIDE_KSU_SUSFS_SYMBOLS` 负责。不开这个开关时，产物与不打补丁
+逐字节相同。
 
 ---
 

@@ -115,6 +115,18 @@ on:
         type: boolean
         default: false
 
+      enable_config_spoof:
+        description: '伪装 /proc/config.gz，隐藏 CONFIG_KSU 等改装痕迹（不影响内核功能）'
+        required: false
+        type: boolean
+        default: true
+
+      config_spoof_rules:
+        description: '伪装规则，形如 "CONFIG_KSU=n CONFIG_KPM=n"。留空用默认（隐藏 KSU/SUSFS/KPM）'
+        required: false
+        type: string
+        default: ''
+
       kernel_suffix:
         description: '自定义内核后缀（留空用设备配置的值，即伪装成原厂）'
         required: false
@@ -150,6 +162,8 @@ on:
       bbr_as_default:      { required: false, type: boolean, default: false }
       enable_ntsync:       { required: false, type: boolean, default: false }
       enable_bbg:          { required: false, type: boolean, default: false }
+      enable_config_spoof: { required: false, type: boolean, default: true }
+      config_spoof_rules:  { required: false, type: string,  default: '' }
       kernel_suffix:       { required: false, type: string,  default: '' }
       output_boot_img:     { required: false, type: boolean, default: true }
       ccache_reset:        { required: false, type: boolean, default: false }
@@ -192,6 +206,8 @@ jobs:
       BBR_AS_DEFAULT:       ${{ inputs.bbr_as_default }}
       ENABLE_NTSYNC:        ${{ inputs.enable_ntsync }}
       ENABLE_BBG:           ${{ inputs.enable_bbg }}
+      ENABLE_CONFIG_SPOOF:  ${{ inputs.enable_config_spoof }}
+      CONFIG_SPOOF_RULES:   ${{ inputs.config_spoof_rules }}
       OUTPUT_BOOT_IMG:      ${{ inputs.output_boot_img }}
 
     steps:
@@ -286,6 +302,7 @@ jobs:
             BBR           : ${{ inputs.enable_bbr }}
             NTsync        : ${{ inputs.enable_ntsync }}
             BBG           : ${{ inputs.enable_bbg }}
+            config 伪装   : ${{ inputs.enable_config_spoof }}
             特性 hash     : $FEATURE_HASH
           ================================================================
           EOF

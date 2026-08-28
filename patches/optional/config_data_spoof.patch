@@ -1,0 +1,107 @@
+Subject: kernel/Makefile: 让 /proc/config.gz 不暴露内核改装痕迹
+
+【背景】
+
+CONFIG_IKCONFIG_PROC=y 时，内核把编译用的 .config **原样**嵌进镜像，
+运行时经 /proc/config.gz 暴露给任何进程 —— 不需要 root 就能读。
+
+kernel/Makefile:157 那条规则就是干这个的：
+
+    $(obj)/config_data: $(KCONFIG_CONFIG) FORCE
+        $(call filechk,cat)
+
+filechk_cat 就是 `cat $<`，逐字节复制 .config，不做任何过滤。
+于是 CONFIG_KSU=y、CONFIG_KSU_SUSFS=y 这些项明明白白写在里面。
+检测方读一次这个文件就能确认设备装了 root 方案 ——
+SUSFS 在文件系统层做的隐藏，在这里被整个绕过。
+
+【做法】
+
+在 config_data 生成后追加一步改写。改的是**产物副本**，不是 .config
+本身，所以：
+  - 不影响任何编译结果，内核功能与不打这个补丁时完全一致
+  - 只改变 /proc/config.gz 的显示内容
+
+规则由 KERNEL_CONFIG_SPOOF 变量提供，格式为空格分隔的 `符号=伪装值`，
+由 scripts/setup-optional.sh 按开关写入 GITHUB_ENV，再由
+scripts/build-kernel.sh 作为 make 变量传入。
+
+变量为空时整段跳过 —— 不开这个特性的构建，产物与打补丁前逐字节相同。
+
+【为什么写成 "# XXX is not set" 而不是删除整行】
+
+删行会让配置项从「显式为 y」变成「凭空消失」。而 .config 里未启用的项
+本该写成 `# CONFIG_XXX is not set`，直接消失反而是更明显的异常特征。
+
+【幂等与可见性】
+
+每条规则先检查当前值：已是目标值就跳过并说明，符号不存在只告警不失败
+（某些符号可能因为特性没开而本就不在）。所有动作打印到构建日志。
+最后对所有「要求隐藏」的规则做一次复查，仍能匹配到 `^SYM=` 就失败 ——
+避免 sed 静默失效导致伪装没生效却构建成功。
+
+【已验证】
+
+补丁应用：对官方 RMX5062 6.1.115 源码 kernel/Makefile 干净应用，
+          反向 dry-run 可识别（apply_patch 的幂等检测正常）。
+逻辑测试：以等价 shell 复现配方体，覆盖四种场景全部通过 ——
+          变量为空（文件逐字节不变）、正常伪装、幂等重跑、
+          伪装成具体值 + 未知符号（不误报）。
+
+【上下文核实】
+
+已对照官方 RMX5062 6.1.115 源码 kernel/Makefile 确认：
+  - `filechk_cat = cat $<` 在 :155
+  - `$(obj)/config_data: $(KCONFIG_CONFIG) FORCE` 在 :157
+  - 其后紧跟 `$(obj)/kheaders.o:`，本补丁插在两者之间
+
+diff --git a/kernel/Makefile b/kernel/Makefile
+--- a/kernel/Makefile
++++ b/kernel/Makefile
+@@ -154,8 +154,46 @@
+ 
+ filechk_cat = cat $<
+ 
++# 伪装 /proc/config.gz 的显示内容。
++#
++# KERNEL_CONFIG_SPOOF 形如 "CONFIG_KSU=n CONFIG_KPM=n"，由构建脚本传入。
++# 值为 n / unset 时写成 "# XXX is not set"（与真实未启用的形态一致，
++# 直接删行反而会让该符号凭空消失，是更明显的异常特征）。
++# 变量为空则整段跳过，产物与未打补丁时逐字节一致。
++define config_spoof
++	if [ -n "$(KERNEL_CONFIG_SPOOF)" ]; then \
++		echo "  CONFIG_SPOOF  $@"; \
++		for rule in $(KERNEL_CONFIG_SPOOF); do \
++			sym="$${rule%%=*}"; val="$${rule#*=}"; \
++			if [ "$$val" = "n" ] || [ "$$val" = "unset" ]; then \
++				repl="# $$sym is not set"; \
++			else \
++				repl="$$sym=$$val"; \
++			fi; \
++			if grep -q "^$$sym=" $@; then \
++				cur="$$(grep -m1 "^$$sym=" $@)"; \
++				sed -i "s|^$$sym=.*|$$repl|" $@; \
++				echo "    $$cur  ->  $$repl"; \
++			elif grep -q "^# $$sym is not set" $@; then \
++				echo "    $$sym 本就未设置，跳过"; \
++			else \
++				echo "    警告: $$sym 不在 config_data 中，跳过"; \
++			fi; \
++		done; \
++		for rule in $(KERNEL_CONFIG_SPOOF); do \
++			sym="$${rule%%=*}"; val="$${rule#*=}"; \
++			if [ "$$val" != "n" ] && [ "$$val" != "unset" ]; then continue; fi; \
++			if grep -q "^$$sym=" $@; then \
++				echo "    错误: $$sym 未能隐藏，config_data 里仍是 $$(grep -m1 "^$$sym=" $@)"; \
++				exit 1; \
++			fi; \
++		done; \
++	fi
++endef
++
+ $(obj)/config_data: $(KCONFIG_CONFIG) FORCE
+ 	$(call filechk,cat)
++	$(Q)$(config_spoof)
+ 
+ $(obj)/kheaders.o: $(obj)/kheaders_data.tar.xz
+ 

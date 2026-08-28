@@ -160,8 +160,28 @@ fi
 
 if is_true "${ENABLE_ZRAM:-false}"; then
     log "zram:"
-    need_y CONFIG_ZRAM "zram 设备"
-    need_y CONFIG_ZSMALLOC "zram 的后端分配器"
+    # ⚠️ 必须是 =m 而不是 =y。
+    #
+    # 编成内建会让原厂的 oplus_bsp_hybridswap_zram 模块加载失败，
+    # 它注册的 15 个私有 memcg 控制文件（含 libprocessgroup 硬编码要写的
+    # memory.app_uid）就都不存在了 —— 后果是刷入后能开机但一个 app 都打不开。
+    # 这个失败在编译期毫无征兆，所以在这里挡住。
+    for c in CONFIG_ZRAM CONFIG_ZSMALLOC; do
+        if grep -q "^${c}=m\$" "$CFG"; then
+            printf '  [✓] %-45s\n' "${c}=m"
+        elif grep -q "^${c}=y\$" "$CFG"; then
+            printf '  [✗] %-45s ← 必须是 =m，不能内建\n' "$c"
+            printf '      内建会导致 oplus_bsp_hybridswap_zram 加载失败，\n'
+            printf '      memcg 里缺 memory.app_uid，Zygote fork 出的 app 全部 abort，\n'
+            printf '      表现为「能开机但所有 app 打不开」。请检查 config/zram.config。\n'
+            FAIL=1
+        else
+            printf '  [✗] %-45s ← zram 未启用\n' "$c"
+            printf '      实际: %s\n' \
+                "$(grep -E "^(# )?${c}[ =]" "$CFG" | head -1 || echo '该符号不在 .config 中')"
+            FAIL=1
+        fi
+    done
 fi
 
 if is_true "${ENABLE_REKERNEL:-false}"; then

@@ -105,6 +105,14 @@ if [ -n "${KSU_VERSION:-}" ]; then
     log "覆盖 KSU_VERSION=$KSU_VERSION"
 fi
 
+# config_data 伪装规则。由 setup-optional.sh 写入 GITHUB_ENV，
+# 这里透传给 kernel/Makefile 里被补丁加进去的 config_spoof。
+# 未启用该特性时变量为空，补丁里那段整个跳过。
+if [ -n "${KERNEL_CONFIG_SPOOF:-}" ]; then
+    MAKE_ARGS+=( KERNEL_CONFIG_SPOOF="$KERNEL_CONFIG_SPOOF" )
+    log "config_data 伪装: $KERNEL_CONFIG_SPOOF"
+fi
+
 # =============================================================================
 # 生成 .config
 # =============================================================================

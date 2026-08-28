@@ -54,26 +54,27 @@ if is_true "${ENABLE_ZRAM:-false}"; then
 
     apply_config_fragment "$REPO_ROOT/config/zram.config"
 
-    # ⚠️ 关键一步：把 zram/zsmalloc 从模块改成内建后，就不再产出 .ko，
-    #    但 modules.bzl 仍然声明着它们，构建会因「声明了却没产出」而失败。
+    # ⚠️ 不要把 ZRAM/ZSMALLOC 改成内建（=y）。
+    #
+    # 本项目早期版本这么做过，代价是刷入后所有 app 都打不开：
+    # 原厂的 oplus_bsp_hybridswap_zram 模块会在 memcg 里注册 15 个���有控制
+    # 文件，其中 memory.app_uid 是 libprocessgroup 建进程组时硬编码要写的。
+    # 编成内建后该模块加载不了，文件不存在，Zygote 每 fork 一个 app 就 abort。
+    # 详见 config/zram.config 的注释。
+    #
+    # 保持 =m 时仍会产出 zram.ko / zsmalloc.ko，modules.bzl 的声明依然成立，
+    # 所以这里不需要（也不允许）动 modules.bzl。
     MODULES_BZL="$KERNEL_DIR/modules.bzl"
-    if [ -f "$MODULES_BZL" ]; then
-        if grep -qE '"(drivers/block/zram/zram|mm/zsmalloc)\.ko"' "$MODULES_BZL"; then
-            log "从 modules.bzl 移除 zram.ko / zsmalloc.ko 声明"
-            cp "$MODULES_BZL" "$MODULES_BZL.bak"
-            sed -i 's|"drivers/block/zram/zram\.ko",||g; s|"mm/zsmalloc\.ko",||g' "$MODULES_BZL"
+    if [ -f "$MODULES_BZL" ] \
+       && ! grep -qE '"(drivers/block/zram/zram|mm/zsmalloc)\.ko"' "$MODULES_BZL"; then
+        die "modules.bzl 里缺少 zram.ko / zsmalloc.ko 声明。
 
-            grep -qE '"(drivers/block/zram/zram|mm/zsmalloc)\.ko"' "$MODULES_BZL" \
-                && die "modules.bzl 清理失败，构建会在模块检查阶段报错" \
-                || { rm -f "$MODULES_BZL.bak"; ok "  modules.bzl 已清理"; }
-        else
-            skip "  modules.bzl 中已无 zram/zsmalloc 声明"
-        fi
-    else
-        skip "  无 modules.bzl（非 bazel 构建），无需清理"
+     这通常意味着源码树被旧版脚本改过（旧版会在改内建时删掉这两行），
+     而当前配置是 ZRAM=m —— 两者不匹配会导致模块产出后无人认领。
+     请清掉源码缓存重新构建。"
     fi
 
-    ok "zram 已启用"
+    ok "zram 已启用（模块形式，与原厂一致）"
 fi
 
 # =============================================================================
@@ -239,6 +240,45 @@ if is_true "${ENABLE_BBG:-false}"; then
 
     enable_config CONFIG_BBG
     ok "BBG 已启用"
+fi
+
+# =============================================================================
+# config_data 伪装 —— 让 /proc/config.gz 不暴露改装痕迹
+#
+# CONFIG_IKCONFIG_PROC=y 时内核把 .config 原样嵌进镜像，运行时经
+# /proc/config.gz 暴露给任何进程（不需要 root 就能读）。CONFIG_KSU=y、
+# CONFIG_KSU_SUSFS=y 这些项就明晃晃写在里面 —— 检测方读一次就知道
+# 这台设备装了 root 方案，SUSFS 在文件系统层做的隐藏在这里被整个绕过。
+#
+# 补丁只改 config_data 这个**产物副本**，不动 .config 本身，
+# 所以内核功能与不开这个特性时完全一致，只有显示内容变了。
+#
+# ⚠️ 这不是万能的：内核符号表、/proc/kallsyms、模块列表等仍有痕迹
+#    （那些由 SUSFS 的 HIDE_KSU_SUSFS_SYMBOLS 负责）。
+#    这一项只堵 /proc/config.gz 这一个口子。
+# =============================================================================
+
+if is_true "${ENABLE_CONFIG_SPOOF:-false}"; then
+    section "可选特性：config_data 伪装"
+
+    apply_patch "$REPO_ROOT/patches/optional/config_data_spoof.patch" "$KERNEL_DIR" 1
+    assert_no_rejects "$KERNEL_DIR" "config_data 伪装补丁"
+
+    # 没开 IKCONFIG_PROC 的话 /proc/config.gz 根本不存在，伪装无意义。
+    # 不是错误，但要说清楚，否则用户会以为开关没生效。
+    if ! grep -q '^CONFIG_IKCONFIG_PROC=y' "$DEFCONFIG"; then
+        warn "CONFIG_IKCONFIG_PROC 未启用 —— /proc/config.gz 本就不存在，"
+        warn "  伪装补丁虽已应用，但没有实际作用。"
+    fi
+
+    # 要伪装的项。默认隐藏 root 方案本身的痕迹。
+    # 可用 workflow 输入 config_spoof_rules 覆盖，格式 "符号=值" 空格分隔。
+    SPOOF_RULES="${CONFIG_SPOOF_RULES:-CONFIG_KSU=n CONFIG_KSU_SUSFS=n CONFIG_KPM=n}"
+
+    log "伪装规则: $SPOOF_RULES"
+    put_env KERNEL_CONFIG_SPOOF "$SPOOF_RULES"
+
+    ok "config_data 伪装已启用（编译时生效，产物中 /proc/config.gz 将显示伪装值）"
 fi
 
 section "可选特性处理完毕"
