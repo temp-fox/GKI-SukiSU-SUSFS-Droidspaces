@@ -37,24 +37,48 @@ section "扫描断裂的符号链接"
 cd "$KERNEL_DIR"
 
 # -----------------------------------------------------------------------------
-# 第 1 步：全树扫描，找出退化的 symlink
+# 第 1 步：全树扫描，找出指向仓库外、目标不存在的链接
 #
-# 判定条件（四者同时满足）：
-#   - 是普通文件，不是真 symlink，体积 < 200 字节
-#   - 内容是单行、无空白
-#   - 内容以 ../ 开头 —— 指向仓库外的相对路径，正是被 zip 丢掉的那类
-#   - 该路径从文件所在目录解析后不存在
+# 有两种形态，都要处理：
 #
-# 用「以 ../ 开头」而不是宽泛的「像个路径」，是为了避免把内核里正常的
-# 单行小文件（如某些 .gitignore、版本号文件）误判成断链。所有会被 zip
-# 丢掉的 symlink 必然指向仓库外，也就必然以 ../ 开头。
+#   A. 悬空的真 symlink（本机型的实际形态）
+#      GitHub 打 zip 时会把仓库内的 symlink 原样保留为 symlink，
+#      但它们指向 ../../../../vendor/...（仓库外），解压后必然悬空。
+#      本机型有 8 处，例如 drivers/soc/oplus/oplus_resctrl。
+#
+#   B. 退化成纯文本的 symlink
+#      某些打包方式会把 symlink 变成「内容为目标路径的小文件」。
+#      保留这条判定，换个源或换台机器时仍能覆盖。
+#
+# ⚠️ 必须按「目标能否解析」来区分，不能按「是不是 symlink」。
+#    内核自带一批仓库内的相对链接（scripts/dtc/include-prefixes/arm64
+#    -> ../../../arch/arm64/boot/dts 之类），它们目标存在、完全正常，
+#    动了会破坏 dtc 的头文件搜索路径。
+#
+# 判定条件：
+#   - 是 symlink，且目标解析不到（-e 为假）；或
+#   - 是普通文件、< 200 字节、内容单行无空白、以 ../ 开头、目标不存在
 # -----------------------------------------------------------------------------
 
 declare -a BROKEN_PATHS=()   # 断链文件在 KERNEL_DIR 下的相对路径
 declare -a BROKEN_TARGETS=() # 它声称指向的目标（相对文件所在目录）
 
+# --- A. 悬空的真 symlink ---
 while IFS= read -r -d '' f; do
-    # 真 symlink 说明打包完好，不用管
+    # -e 跟随链接：目标存在就是正常链接，跳过。
+    # 这一条把内核自带的仓库内链接全部排除掉。
+    [ -e "$f" ] && continue
+
+    target="$(readlink "$f")"
+    [ -n "$target" ] || continue
+
+    BROKEN_PATHS+=("${f#./}")
+    BROKEN_TARGETS+=("$target")
+done < <(find . -type l -not -path './.git/*' -not -path './out/*' -print0)
+
+# --- B. 退化成纯文本的 symlink ---
+while IFS= read -r -d '' f; do
+    # 真 symlink 已在上一轮处理过
     [ -L "$f" ] && continue
 
     content="$(tr -d '\r\n' < "$f")"
