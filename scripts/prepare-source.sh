@@ -60,26 +60,63 @@ else
 
         if command -v aria2c >/dev/null 2>&1; then
             aria2c -s16 -x16 -k1M --console-log-level=warn \
-                   --summary-interval=0 -o src.zip "$ZIP_URL"
+                   --summary-interval=0 -o src.zip "$ZIP_URL" \
+                || die "aria2c 下载源码失败"
         else
-            curl -fSL --retry 3 -o src.zip "$ZIP_URL"
+            curl -fSL --retry 3 -o src.zip "$ZIP_URL" || die "curl 下载源码失败"
+        fi
+
+        # 下载完整性：GitHub 出错时会返回一个 HTML 错误页，
+        # 文件名照样是 src.zip，只有几 KB。不验一下会一路错到解压。
+        require_file src.zip "下载的源码 zip"
+        ZIP_BYTES="$(stat -c%s src.zip)"
+        log "zip 体积: $(( ZIP_BYTES / 1024 / 1024 )) MB"
+        [ "$ZIP_BYTES" -gt 52428800 ] \
+            || die "源码 zip 只有 $(( ZIP_BYTES / 1024 )) KB，明显异常（内核源码应在 200 MB 以上）。
+     多半下到的是 GitHub 的错误页而不是 zip。前 200 字节：
+$(head -c 200 src.zip | tr -d '\0' | sed 's/^/         /')"
+
+        # zip 顶层目录名从 zip 自己的目录表里读，而不是解压后靠 find 猜。
+        #
+        # ⚠️ 原先用 `find . -maxdepth 1 -type d ... | head -1` 探测，有两个毛病：
+        #    1. find 的输出顺序由文件系统决定，不保证是我们要的那个目录
+        #    2. 探测发生在解压之后，一旦 unzip 部分失败就会把残留目录
+        #       误认成源码根，mv 成 common/ 后直到校验 Makefile 才报错，
+        #       错误信息完全指不到根因（首次 CI 就栽在这里）
+        TOP_DIRS="$(unzip -Z1 src.zip 2>/dev/null \
+                    | sed -n 's|^\([^/]*\)/.*|\1|p' | sort -u)"
+        TOP_COUNT="$(printf '%s\n' "$TOP_DIRS" | grep -c . || true)"
+        log "zip 顶层目录: $(printf '%s' "$TOP_DIRS" | tr '\n' ' ')"
+
+        if [ -n "${SOURCE_UNZIP_DIR:-}" ]; then
+            EXTRACTED="$SOURCE_UNZIP_DIR"
+        elif [ "$TOP_COUNT" -eq 1 ]; then
+            EXTRACTED="$TOP_DIRS"
+        else
+            die "zip 里有 ${TOP_COUNT} 个顶层目录，无法自动判断哪个是源码根：
+$(printf '%s\n' "$TOP_DIRS" | sed 's/^/         /')
+     请在 devices/${DEVICE_CODE:-<机型>}.env 里设置 SOURCE_UNZIP_DIR 明确指定。"
         fi
 
         log "解压中（大仓库需要几分钟）..."
-        unzip -q src.zip
+        # -qq 而非 -q：静默解压会掩盖部分失败，-qq 保留错误但不刷屏。
+        # -o 强制覆盖：文件已存在时 unzip 默认交互式提问，而 CI 里 stdin
+        #    是空的 → 读到 EOF → 非零退出。缓存部分命中或重跑时会撞上。
+        unzip -qq -o src.zip || die "解压 src.zip 失败"
         rm -f src.zip
 
-        # ���动探测解压出来的顶层目录，不依赖硬编码目录名。
-        # 厂商仓库改名或换 ref 时都不会因此崩掉。
-        if [ -n "${SOURCE_UNZIP_DIR:-}" ]; then
-            EXTRACTED="$SOURCE_UNZIP_DIR"
-        else
-            EXTRACTED="$(find . -maxdepth 1 -mindepth 1 -type d \
-                         ! -name common ! -name vendor ! -name 'KernelSU*' \
-                         -printf '%f\n' | head -1)"
-        fi
-        [ -n "$EXTRACTED" ] && [ -d "$EXTRACTED" ] \
-            || die "解���后未找到源码目录（探测结果：'$EXTRACTED'）"
+        [ -d "$EXTRACTED" ] \
+            || die "解压后没有预期的目录 '$EXTRACTED'。
+     当前工作区内容：
+$(ls -la | sed 's/^/         /')"
+
+        # 在 mv 之前就确认这确实是内核源码根 —— 早失败一步，
+        # 错误信息就能指到「zip 结构不符预期」而不是「Makefile 不存在」
+        [ -f "$EXTRACTED/Makefile" ] && [ -d "$EXTRACTED/arch/arm64" ] \
+            || die "'$EXTRACTED' 不像内核源码根（缺 Makefile 或 arch/arm64）。
+     该目录内容：
+$(ls -la "$EXTRACTED" | head -25 | sed 's/^/         /')
+     若源码在子目录里，请在 devices/*.env 设置 SOURCE_UNZIP_DIR。"
 
         mv "$EXTRACTED" common
         put_env SOURCE_SHA "$SOURCE_SHA"
