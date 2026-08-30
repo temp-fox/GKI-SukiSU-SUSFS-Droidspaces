@@ -165,7 +165,32 @@ if is_true "$ENABLE_SUSFS"; then
 fi
 
 # -----------------------------------------------------------------------------
-# 4. 推导并校验 KSU_VERSION
+# 4. SukiSU 上游兼容修正
+# -----------------------------------------------------------------------------
+
+section "应用 SukiSU 兼容修正"
+
+SULOG_EVENT="$WORKSPACE/KernelSU/kernel/sulog/event.c"
+if [ -f "$SULOG_EVENT" ] \
+   && grep -qF 'static inline struct user_arg_ptr *user_arg_null_ptr(void)' "$SULOG_EVENT" \
+   && grep -qF 'const struct user_arg_ptr argv' "$SULOG_EVENT" \
+   && grep -qF 'ksu_sulog_capture(KSU_SULOG_EVENT_IOCTL_GRANT_ROOT, NULL, USER_ARG_NULL, gfp)' "$SULOG_EVENT"; then
+    # builtin 当前上游把 USER_ARG_NULL 定义成指针，但 ksu_sulog_capture()
+    # 的第三个参数是 struct user_arg_ptr 值。clang 因此报：
+    # passing 'struct user_arg_ptr *' to parameter of incompatible type
+    # 'struct user_arg_ptr'; dereference with *。
+    # 这里只修调用点，保持上游 helper 结构不变，后续上游修好后自然跳过。
+    sed -i 's/ksu_sulog_capture(KSU_SULOG_EVENT_IOCTL_GRANT_ROOT, NULL, USER_ARG_NULL, gfp)/ksu_sulog_capture(KSU_SULOG_EVENT_IOCTL_GRANT_ROOT, NULL, *USER_ARG_NULL, gfp)/' "$SULOG_EVENT"
+    assert_contains "$SULOG_EVENT" 'NULL, *USER_ARG_NULL, gfp)' "SukiSU sulog USER_ARG_NULL 解引用修正"
+    ok "已修正 SukiSU sulog USER_ARG_NULL 类型不匹配"
+elif [ -f "$SULOG_EVENT" ] && grep -qF 'NULL, *USER_ARG_NULL, gfp)' "$SULOG_EVENT"; then
+    skip "SukiSU sulog USER_ARG_NULL 已修正"
+else
+    skip "当前 SukiSU 不需要 sulog USER_ARG_NULL 修正"
+fi
+
+# -----------------------------------------------------------------------------
+# 5. 推导并校验 KSU_VERSION
 #
 # 计算公式（来自 SukiSU 的 kernel/Kbuild 或 kernel/Makefile）：
 #   KSU_VERSION = VERSION_BASE + commit_count - VERSION_OFFSET
