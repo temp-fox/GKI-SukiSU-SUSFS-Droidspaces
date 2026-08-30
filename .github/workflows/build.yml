@@ -441,6 +441,15 @@ jobs:
           path: ~/.ccache
           key: ccache-${{ inputs.device }}-${{ env.FEATURE_HASH }}-${{ github.run_id }}
 
+      - name: 上传 AnyKernel3 刷机包
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.package.outputs.artifact_name }}-AnyKernel3
+          path: kernel_workspace/artifacts/AnyKernel3_*.zip
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 30
+
       - name: 上传内核 Image
         uses: actions/upload-artifact@v4
         with:

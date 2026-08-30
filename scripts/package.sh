@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 输出产物：内核 Image + boot.img + 构建信息。
+# 输出产物：AnyKernel3 刷机包 + 内核 Image + boot.img + 构建信息。
 
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -45,7 +45,7 @@ put_output artifact_name "$BASE_NAME"
 # =============================================================================
 # 构建信息
 #
-# 写成独立文件，和 Image / boot.img 分开上传。
+# 写成独立文件，同时放进 AnyKernel3 包内，和 Image / boot.img 分开上传。
 # =============================================================================
 
 section "生成构建信息"
@@ -109,6 +109,33 @@ Droidspaces
 EOF
 
 cat "$INFO"
+
+# =============================================================================
+# AnyKernel3
+# =============================================================================
+
+section "打包 AnyKernel3"
+
+AK3="$WORKSPACE/AnyKernel3"
+if [ ! -d "$AK3" ]; then
+    log "克隆 AnyKernel3"
+    git clone --depth=1 -b gki-2.0 \
+        https://github.com/WildKernels/AnyKernel3.git "$AK3" \
+        || die "无法克隆 AnyKernel3"
+    rm -rf "$AK3/.git"
+fi
+
+cp "$IMAGE" "$AK3/Image"
+cp "$INFO"  "$AK3/build-info.txt"
+
+ZIP_PATH="$OUT_DIR/AnyKernel3_${BASE_NAME}.zip"
+( cd "$AK3" && zip -r9 -q "$ZIP_PATH" ./* )
+require_file "$ZIP_PATH" "AnyKernel3 包"
+
+# 把构建信息写进 zip 注释，这样不解压也能看到
+zip -z "$ZIP_PATH" < "$INFO" >/dev/null 2>&1 || true
+
+ok "AnyKernel3: $(basename "$ZIP_PATH") （$(du -h "$ZIP_PATH" | cut -f1)）"
 
 # =============================================================================
 # 导出内核 Image
