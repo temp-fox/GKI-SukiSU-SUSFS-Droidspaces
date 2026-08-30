@@ -45,7 +45,7 @@ put_output artifact_name "$BASE_NAME"
 # =============================================================================
 # 构建信息
 #
-# 写成独立文件，同时放进 AnyKernel3 包内，和 Image / boot.img 分开上传。
+# 写成独立文件，同时放进 AnyKernel3 目录内，和 Image / boot.img 分开上传。
 # =============================================================================
 
 section "生成构建信息"
@@ -114,28 +114,31 @@ cat "$INFO"
 # AnyKernel3
 # =============================================================================
 
-section "打包 AnyKernel3"
+section "准备 AnyKernel3"
 
-AK3="$WORKSPACE/AnyKernel3"
-if [ ! -d "$AK3" ]; then
+AK3_SRC="$WORKSPACE/AnyKernel3"
+AK3_OUT="$OUT_DIR/AnyKernel3_${BASE_NAME}"
+if [ ! -d "$AK3_SRC" ]; then
     log "克隆 AnyKernel3"
     git clone --depth=1 -b gki-2.0 \
-        https://github.com/WildKernels/AnyKernel3.git "$AK3" \
+        https://github.com/WildKernels/AnyKernel3.git "$AK3_SRC" \
         || die "无法克隆 AnyKernel3"
-    rm -rf "$AK3/.git"
+    rm -rf "$AK3_SRC/.git"
 fi
 
-cp "$IMAGE" "$AK3/Image"
-cp "$INFO"  "$AK3/build-info.txt"
+rm -rf "$AK3_OUT"
+mkdir -p "$AK3_OUT"
+cp -a "$AK3_SRC"/. "$AK3_OUT"/
+cp "$IMAGE" "$AK3_OUT/Image"
+cp "$INFO"  "$AK3_OUT/build-info.txt"
 
-ZIP_PATH="$OUT_DIR/AnyKernel3_${BASE_NAME}.zip"
-( cd "$AK3" && zip -r9 -q "$ZIP_PATH" ./* )
-require_file "$ZIP_PATH" "AnyKernel3 包"
+require_file "$AK3_OUT/anykernel.sh" "AnyKernel3 脚本"
+require_file "$AK3_OUT/Image"        "AnyKernel3 内核 Image"
 
-# 把构建信息写进 zip 注释，这样不解压也能看到
-zip -z "$ZIP_PATH" < "$INFO" >/dev/null 2>&1 || true
-
-ok "AnyKernel3: $(basename "$ZIP_PATH") （$(du -h "$ZIP_PATH" | cut -f1)）"
+# 不在这里再生成 AnyKernel3_*.zip。actions/upload-artifact 下载时本来就会
+# 产出一个 zip；如果先 zip 再上传，用户拿到的是「artifact zip 里套刷机包 zip」
+# 的两层结构。直接上传目录内容，下载到的 artifact zip 本身就是可刷 AK3 包。
+ok "AnyKernel3 目录: $(basename "$AK3_OUT")"
 
 # =============================================================================
 # 导出内核 Image

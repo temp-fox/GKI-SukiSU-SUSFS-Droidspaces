@@ -445,9 +445,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ${{ steps.package.outputs.artifact_name }}-AnyKernel3
-          path: kernel_workspace/artifacts/AnyKernel3_*.zip
+          path: kernel_workspace/artifacts/AnyKernel3_${{ steps.package.outputs.artifact_name }}/*
           if-no-files-found: error
-          compression-level: 0
+          compression-level: 9
           retention-days: 30
 
       - name: 上传内核 Image
