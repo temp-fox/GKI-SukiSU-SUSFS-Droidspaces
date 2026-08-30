@@ -478,6 +478,16 @@ jobs:
           compression-level: 6
           retention-days: 30
 
+      - name: 上传最终内核配置
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.package.outputs.artifact_name }}-final-config
+          path: kernel_workspace/common/out/.config
+          if-no-files-found: error
+          include-hidden-files: true
+          compression-level: 6
+          retention-days: 30
+
       - name: 上传补丁冲突文件
         # 有 .rej 说明补丁没干净应用。这是排查的第一手材料，
         # 即使构建失败也要传上来。
@@ -541,6 +551,8 @@ jobs:
             echo "| 内核 | ${KERNEL_VERSION:-?}.${ACTUAL_SUBLEVEL:-?}-${ANDROID_VERSION:-?} |"
             echo "| 源码 | \`${SOURCE_SHA:0:8}\` |"
             echo "| SukiSU | ${KSU_REF_RESOLVED:-?} \`${KSU_SHORT:-?}\` (版本号 ${KSU_VERSION:-未启用}) |"
+            echo "| SukiSU 编译模式 | ${KSU_BUILD_MODE:-未知} ${KSU_CONFIG_VALUE:+\`${KSU_CONFIG_VALUE}\`} |"
+            echo "| SukiSU Manager | ${KSU_MANAGER_PACKAGE:-未设置} / ${KSU_EXPECTED_SIZE:-未设置} |"
             echo "| SUSFS | ${SUSFS_VERSION:-未启用} |"
             echo "| Droidspaces | ${{ inputs.enable_droidspaces }} (kABI ${KABI_SLOTS:-?}) |"
             echo "| 版本串 | \`${KERNEL_VERSION_STRING:-未知}\` |"

@@ -105,6 +105,28 @@ if [ -n "${KSU_VERSION:-}" ]; then
     log "覆盖 KSU_VERSION=$KSU_VERSION"
 fi
 
+# 与 SukiSU 官方 Kbuild / RMX5062 参考 flow 对齐的管理器识别参数。
+# size/hash 官方已有默认值，但这里显式透传，构建日志和 build-info 都能复核；
+# package name 官方不会默认设置，必须从外部传入。
+if is_true "${ENABLE_KSU:-true}"; then
+    KSU_MANAGER_PACKAGE="${KSU_MANAGER_PACKAGE:-com.sukisu.ultra}"
+    KSU_EXPECTED_SIZE="${KSU_EXPECTED_SIZE:-0x35c}"
+    KSU_EXPECTED_HASH="${KSU_EXPECTED_HASH:-947ae944f3de4ed4c21a7e4f7953ecf351bfa2b36239da37a34111ad29993eef}"
+
+    MAKE_ARGS+=(
+        KSU_MANAGER_PACKAGE="$KSU_MANAGER_PACKAGE"
+        KSU_EXPECTED_SIZE="$KSU_EXPECTED_SIZE"
+        KSU_EXPECTED_HASH="$KSU_EXPECTED_HASH"
+    )
+
+    log "SukiSU Manager 包名: $KSU_MANAGER_PACKAGE"
+    log "SukiSU Manager 签名 size: $KSU_EXPECTED_SIZE"
+    log "SukiSU Manager 签名 hash: $KSU_EXPECTED_HASH"
+    put_env KSU_MANAGER_PACKAGE "$KSU_MANAGER_PACKAGE"
+    put_env KSU_EXPECTED_SIZE "$KSU_EXPECTED_SIZE"
+    put_env KSU_EXPECTED_HASH "$KSU_EXPECTED_HASH"
+fi
+
 # config_data 伪装规则。由 setup-optional.sh 写入 GITHUB_ENV，
 # 这里透传给 kernel/Makefile 里被补丁加进去的 config_spoof。
 # 未启用该特性时变量为空，补丁里那段整个跳过。
@@ -127,6 +149,20 @@ require_file "$KERNEL_DIR/out/.config" "生成的 .config"
 # =============================================================================
 
 OUT_CONFIG="$KERNEL_DIR/out/.config" bash "$SCRIPT_DIR/verify-config.sh"
+
+if is_true "${ENABLE_KSU:-true}"; then
+    if grep -q '^CONFIG_KSU=y$' "$KERNEL_DIR/out/.config"; then
+        KSU_CONFIG_VALUE="CONFIG_KSU=y"
+        KSU_BUILD_MODE="built-in"
+        ok "SukiSU 编译模式: built-in（CONFIG_KSU=y）"
+    elif grep -q '^CONFIG_KSU=m$' "$KERNEL_DIR/out/.config"; then
+        die "SukiSU 最终配置是 CONFIG_KSU=m，会编译成 LKM；本项目要求 built-in（CONFIG_KSU=y）。"
+    else
+        die "SukiSU 最终 .config 中没有 CONFIG_KSU=y；本项目要求 built-in。"
+    fi
+    put_env KSU_CONFIG_VALUE "$KSU_CONFIG_VALUE"
+    put_env KSU_BUILD_MODE "$KSU_BUILD_MODE"
+fi
 
 # =============================================================================
 # 编译

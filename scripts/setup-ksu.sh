@@ -32,6 +32,13 @@ KERNEL_DIR="${KERNEL_DIR:-$WORKSPACE/common}"
 KSU_REF="${KSU_REF:-builtin}"
 ENABLE_SUSFS="${ENABLE_SUSFS:-true}"
 
+# SukiSU 官方 Manager 的识别参数。官方 Kbuild 默认签名 size/hash，
+# 参考 RMX5062 flow 还额外固定包名；这里统一导出，后续 make 显式透传，
+# 尽量减少当前项目与已验证参考 flow 在管理器识别路径上的差异。
+KSU_MANAGER_PACKAGE="${KSU_MANAGER_PACKAGE:-com.sukisu.ultra}"
+KSU_EXPECTED_SIZE="${KSU_EXPECTED_SIZE:-0x35c}"
+KSU_EXPECTED_HASH="${KSU_EXPECTED_HASH:-947ae944f3de4ed4c21a7e4f7953ecf351bfa2b36239da37a34111ad29993eef}"
+
 cd "$WORKSPACE"
 
 section "集成 SukiSU-Ultra （ref: $KSU_REF）"
@@ -101,6 +108,20 @@ cd "$WORKSPACE/KernelSU"
      SukiSU 的 Makefile 依赖 git commit 计数推导版本号，
      没有 .git 会落到兜底值 13000，管理器必然报版本不匹配。
      检查是否有步骤删掉了它。"
+
+# 官方 setup.sh 在 `git checkout "$KSU_REF"` 失败时只打印 fallback，
+# 不会直接退出。这里补一道硬校验，避免本来想构建 builtin，实际却落到 main
+# 或其他 ref，刷机后才发现模式/功能不一致。
+if ! KSU_REF_COMMIT="$(git rev-parse --verify "${KSU_REF}^{commit}" 2>/dev/null)"; then
+    die "SukiSU ref '$KSU_REF' 无法解析为 commit。请检查 ksu_ref 输入是否正确。"
+fi
+KSU_HEAD_COMMIT="$(git rev-parse HEAD)"
+if [ "$KSU_HEAD_COMMIT" != "$KSU_REF_COMMIT" ]; then
+    die "SukiSU checkout 结果与请求 ref 不一致。
+     请求: $KSU_REF -> ${KSU_REF_COMMIT:0:12}
+     实际: HEAD -> ${KSU_HEAD_COMMIT:0:12}
+     官方 setup.sh 可能 checkout 失败后 fallback，已停止构建。"
+fi
 
 if [ -f .git/shallow ]; then
     log "检测到浅克隆，补全完整历史（否则 commit 计数会偏小）"
@@ -272,6 +293,13 @@ put_env KSU_DATE         "$KSU_DATE"
 put_env KSU_VERSION      "$KSU_VERSION"
 put_env KSU_VERSION_FULL "$KSU_VERSION_FULL"
 put_env KSU_TAG          "${KSU_TAG:-none}"
+put_env KSU_MANAGER_PACKAGE "$KSU_MANAGER_PACKAGE"
+put_env KSU_EXPECTED_SIZE    "$KSU_EXPECTED_SIZE"
+put_env KSU_EXPECTED_HASH    "$KSU_EXPECTED_HASH"
+
+ok "KSU_MANAGER_PACKAGE = $KSU_MANAGER_PACKAGE"
+ok "KSU_EXPECTED_SIZE    = $KSU_EXPECTED_SIZE"
+ok "KSU_EXPECTED_HASH    = $KSU_EXPECTED_HASH"
 
 put_output ksu_version "$KSU_VERSION"
 put_output ksu_sha     "$KSU_SHORT"

@@ -69,9 +69,12 @@ cat > "$INFO" <<EOF
 
 Root 方案
   SukiSU-Ultra    ${KSU_REF_RESOLVED:-?} @ ${KSU_SHORT:-?}
+  编译模式        ${KSU_BUILD_MODE:-未知}${KSU_CONFIG_VALUE:+ ($KSU_CONFIG_VALUE)}
   版本号          ${KSU_VERSION:-未启用}
   完整版本        ${KSU_VERSION_FULL:-未启用}
   上游提交日期    ${KSU_DATE:-未知}
+  Manager 包名    ${KSU_MANAGER_PACKAGE:-未设置}
+  Manager 签名    size=${KSU_EXPECTED_SIZE:-未设置} hash=${KSU_EXPECTED_HASH:-未设置}
 
 SUSFS
   启用            $(is_true "${ENABLE_SUSFS:-false}" && echo "是" || echo "否")
