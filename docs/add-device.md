@@ -132,8 +132,9 @@ enable_susfs        = false
 enable_droidspaces  = false
 enable_kpm          = false
 enable_network_ext  = false
-enable_zram         = false
 enable_rekernel     = false
+
+# zram 是必选基础功能，workflow 固定 ENABLE_ZRAM=true，不提供关闭参数。
 ```
 
 **这一步是最容易失败的**，因为厂商源码往往有各种坑。

@@ -47,7 +47,7 @@
 | `kabi_slots` | `auto` | kABI 槽位，`auto` = 用设备配置的默认值 |
 | `enable_kpm` | ✅ | SukiSU 的内核补丁模块框架 |
 | `enable_network_ext` | ✅ | ipset / 高级 iptables（容器跑 Docker、UFW 需要） |
-| `enable_zram` | ✅ | 内存压缩，对跑容器的机器有利 |
+| zram | 必选 | 内存压缩，固定启用为模块形式，不提供关闭参数 |
 | `enable_rekernel` | ✅ | 改善后台进程冻结行为 |
 | `enable_bbr` | ❌ | BBR 拥塞控制算法 |
 | `enable_ntsync` | ❌ | Winlator 需要。⚠️ 会把 `/dev/ntsync` 开放给所有 App |

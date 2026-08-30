@@ -79,12 +79,6 @@ on:
         type: boolean
         default: true
 
-      enable_zram:
-        description: '启用 zram 内存压缩（对跑容器的机器有利）'
-        required: false
-        type: boolean
-        default: true
-
       enable_rekernel:
         description: '启用 Re-Kernel（改善后台进程冻结行为）'
         required: false
@@ -156,7 +150,6 @@ on:
       kabi_slots:          { required: false, type: string,  default: 'auto' }
       enable_kpm:          { required: false, type: boolean, default: true }
       enable_network_ext:  { required: false, type: boolean, default: true }
-      enable_zram:         { required: false, type: boolean, default: true }
       enable_rekernel:     { required: false, type: boolean, default: true }
       enable_bbr:          { required: false, type: boolean, default: false }
       bbr_as_default:      { required: false, type: boolean, default: false }
@@ -200,7 +193,7 @@ jobs:
       ENABLE_DROIDSPACES:   ${{ inputs.enable_droidspaces }}
       ENABLE_KPM:           ${{ inputs.enable_kpm }}
       ENABLE_NETWORK_EXT:   ${{ inputs.enable_network_ext }}
-      ENABLE_ZRAM:          ${{ inputs.enable_zram }}
+      ENABLE_ZRAM:          'true'
       ENABLE_REKERNEL:      ${{ inputs.enable_rekernel }}
       ENABLE_BBR:           ${{ inputs.enable_bbr }}
       BBR_AS_DEFAULT:       ${{ inputs.bbr_as_default }}
@@ -279,7 +272,7 @@ jobs:
             "${{ inputs.ksu_ref }}" "${{ inputs.enable_susfs }}" \
             "${{ inputs.enable_droidspaces }}" "$SLOTS" \
             "${{ inputs.enable_kpm }}" "${{ inputs.enable_network_ext }}" \
-            "${{ inputs.enable_zram }}" "${{ inputs.enable_rekernel }}" \
+            "true" "${{ inputs.enable_rekernel }}" \
             "${{ inputs.enable_ntsync }}" | sha256sum | cut -c1-12)
           echo "FEATURE_HASH=$FEATURE_HASH" >> "$GITHUB_ENV"
 
@@ -297,7 +290,7 @@ jobs:
             Droidspaces   : ${{ inputs.enable_droidspaces }} (kABI 槽位 $KABI_SLOTS)
             KPM           : ${{ inputs.enable_kpm }}
             网络扩展      : ${{ inputs.enable_network_ext }}
-            zram          : ${{ inputs.enable_zram }}
+            zram          : true（必选）
             Re-Kernel     : ${{ inputs.enable_rekernel }}
             BBR           : ${{ inputs.enable_bbr }}
             NTsync        : ${{ inputs.enable_ntsync }}
