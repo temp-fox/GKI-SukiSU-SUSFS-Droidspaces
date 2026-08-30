@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 打包产物：AnyKernel3 刷机包 + boot.img + 构建信息。
+# 输出产物：内核 Image + boot.img + 构建信息。
 
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -45,8 +45,7 @@ put_output artifact_name "$BASE_NAME"
 # =============================================================================
 # 构建信息
 #
-# 同时写成独立文件、塞进 zip 注释、放进 AnyKernel3 包内 ——
-# 无论用户从哪个角度看到这个包，都能查到它是怎么来的。
+# 写成独立文件，和 Image / boot.img 分开上传。
 # =============================================================================
 
 section "生成构建信息"
@@ -112,31 +111,15 @@ EOF
 cat "$INFO"
 
 # =============================================================================
-# AnyKernel3
+# 导出内核 Image
 # =============================================================================
 
-section "打包 AnyKernel3"
+section "导出内核 Image"
 
-AK3="$WORKSPACE/AnyKernel3"
-if [ ! -d "$AK3" ]; then
-    log "克隆 AnyKernel3"
-    git clone --depth=1 -b gki-2.0 \
-        https://github.com/WildKernels/AnyKernel3.git "$AK3" \
-        || die "无法克隆 AnyKernel3"
-    rm -rf "$AK3/.git"
-fi
-
-cp "$IMAGE" "$AK3/Image"
-cp "$INFO"  "$AK3/build-info.txt"
-
-ZIP_PATH="$OUT_DIR/AnyKernel3_${BASE_NAME}.zip"
-( cd "$AK3" && zip -r9 -q "$ZIP_PATH" ./* )
-require_file "$ZIP_PATH" "AnyKernel3 包"
-
-# 把构建信息写进 zip 注释，这样不解压也能看到
-zip -z "$ZIP_PATH" < "$INFO" >/dev/null 2>&1 || true
-
-ok "AnyKernel3: $(basename "$ZIP_PATH") （$(du -h "$ZIP_PATH" | cut -f1)）"
+IMAGE_OUT="$OUT_DIR/${BASE_NAME}_Image"
+cp "$IMAGE" "$IMAGE_OUT"
+require_file "$IMAGE_OUT" "内核 Image"
+ok "Image: $(basename "$IMAGE_OUT") （$(du -h "$IMAGE_OUT" | cut -f1)）"
 
 # =============================================================================
 # boot.img
@@ -151,18 +134,12 @@ if is_true "${OUTPUT_BOOT_IMG:-true}"; then
     AVBTOOL="${AVBTOOL:-$WORKSPACE/kernel-build-tools/linux-x86/bin/avbtool}"
 
     if [ ! -f "$MKBOOTIMG" ]; then
-        warn "找不到 mkbootimg，跳过 boot.img（AnyKernel3 包仍可正常使用）"
+        warn "找不到 mkbootimg，跳过 boot.img（仍会输出内核 Image）"
     else
         BOOT_DIR="$WORKSPACE/bootimg"
         mkdir -p "$BOOT_DIR"
         cd "$BOOT_DIR"
         cp "$IMAGE" ./Image
-
-        # 三种压缩形态：不同机型的 bootloader 支持度不一样，都给出来
-        gzip -n -k -f -9 ./Image > ./Image.gz
-        if command -v lz4 >/dev/null 2>&1; then
-            lz4 -f -9 ./Image ./Image.lz4 >/dev/null 2>&1 || true
-        fi
 
         # AVB 签名密钥。用测试密钥即可 —— bootloader 已解锁的设备
         # 不校验签名，这里签名只是为了让镜像格式完整。
@@ -208,8 +185,6 @@ if is_true "${OUTPUT_BOOT_IMG:-true}"; then
         }
 
         make_boot ./Image     ""
-        make_boot ./Image.gz  "-gz"
-        make_boot ./Image.lz4 "-lz4"
     fi
 fi
 

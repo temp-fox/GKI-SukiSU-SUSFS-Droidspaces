@@ -441,14 +441,30 @@ jobs:
           path: ~/.ccache
           key: ccache-${{ inputs.device }}-${{ env.FEATURE_HASH }}-${{ github.run_id }}
 
-      - name: 上传刷机包
+      - name: 上传内核 Image
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ steps.package.outputs.artifact_name }}
-          path: |
-            kernel_workspace/artifacts/*.zip
-            kernel_workspace/artifacts/*.img
-            kernel_workspace/artifacts/build-info.txt
+          name: ${{ steps.package.outputs.artifact_name }}-Image
+          path: kernel_workspace/artifacts/*_Image
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 30
+
+      - name: 上传 boot.img
+        if: inputs.output_boot_img
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.package.outputs.artifact_name }}-boot
+          path: kernel_workspace/artifacts/*_boot*.img
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 30
+
+      - name: 上传构建信息
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.package.outputs.artifact_name }}-build-info
+          path: kernel_workspace/artifacts/build-info.txt
           if-no-files-found: error
           compression-level: 6
           retention-days: 30
