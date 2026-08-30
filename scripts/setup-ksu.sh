@@ -193,19 +193,33 @@ section "应用 SukiSU 兼容修正"
 
 SULOG_EVENT="$WORKSPACE/KernelSU/kernel/sulog/event.c"
 if [ -f "$SULOG_EVENT" ] \
-   && grep -qF 'static inline struct user_arg_ptr *user_arg_null_ptr(void)' "$SULOG_EVENT" \
-   && grep -qF 'const struct user_arg_ptr argv' "$SULOG_EVENT" \
-   && grep -qF 'ksu_sulog_capture(KSU_SULOG_EVENT_IOCTL_GRANT_ROOT, NULL, USER_ARG_NULL, gfp)' "$SULOG_EVENT"; then
-    # builtin 当前上游把 USER_ARG_NULL 定义成指针，但 ksu_sulog_capture()
-    # 的第三个参数是 struct user_arg_ptr 值。clang 因此报：
-    # passing 'struct user_arg_ptr *' to parameter of incompatible type
-    # 'struct user_arg_ptr'; dereference with *。
-    # 这里只修调用点，保持上游 helper 结构不变，后续上游修好后自然跳过。
-    sed -i 's/ksu_sulog_capture(KSU_SULOG_EVENT_IOCTL_GRANT_ROOT, NULL, USER_ARG_NULL, gfp)/ksu_sulog_capture(KSU_SULOG_EVENT_IOCTL_GRANT_ROOT, NULL, *USER_ARG_NULL, gfp)/' "$SULOG_EVENT"
-    assert_contains "$SULOG_EVENT" 'NULL, *USER_ARG_NULL, gfp)' "SukiSU sulog USER_ARG_NULL 解引用修正"
-    ok "已修正 SukiSU sulog USER_ARG_NULL 类型不匹配"
-elif [ -f "$SULOG_EVENT" ] && grep -qF 'NULL, *USER_ARG_NULL, gfp)' "$SULOG_EVENT"; then
-    skip "SukiSU sulog USER_ARG_NULL 已修正"
+   && grep -qF 'static inline struct user_arg_ptr *user_arg_null_ptr(void)' "$SULOG_EVENT"; then
+    # SukiSU builtin 上游这里出现过两种形态：
+    #   - ksu_sulog_capture() 第三个参数是 struct user_arg_ptr 值：需要 *USER_ARG_NULL
+    #   - ksu_sulog_capture() 第三个参数是 struct user_arg_ptr * 指针：需要 USER_ARG_NULL
+    # 之前固定改成解引用会修好一种形态，却让 SUSFS 组合下的指针形态反向编译失败。
+    # 这里按函数真实签名修调用点，签名不认识时直接停止，避免 CI 编译阶段才暴露。
+    if grep -qE 'struct[[:space:]]+user_arg_ptr[[:space:]]+\*argv_user' "$SULOG_EVENT"; then
+        if grep -qF 'ksu_sulog_capture(KSU_SULOG_EVENT_IOCTL_GRANT_ROOT, NULL, *USER_ARG_NULL, gfp)' "$SULOG_EVENT"; then
+            sed -i 's/ksu_sulog_capture(KSU_SULOG_EVENT_IOCTL_GRANT_ROOT, NULL, \*USER_ARG_NULL, gfp)/ksu_sulog_capture(KSU_SULOG_EVENT_IOCTL_GRANT_ROOT, NULL, USER_ARG_NULL, gfp)/' "$SULOG_EVENT"
+            ok "已按指针签名还原 SukiSU sulog USER_ARG_NULL 调用"
+        else
+            skip "SukiSU sulog USER_ARG_NULL 已匹配指针签名"
+        fi
+        assert_contains "$SULOG_EVENT" 'NULL, USER_ARG_NULL, gfp)' "SukiSU sulog 指针参数修正"
+    elif grep -qE '(const[[:space:]]+)?struct[[:space:]]+user_arg_ptr[[:space:]]+argv([,[:space:]]|$)' "$SULOG_EVENT"; then
+        if grep -qF 'ksu_sulog_capture(KSU_SULOG_EVENT_IOCTL_GRANT_ROOT, NULL, USER_ARG_NULL, gfp)' "$SULOG_EVENT"; then
+            sed -i 's/ksu_sulog_capture(KSU_SULOG_EVENT_IOCTL_GRANT_ROOT, NULL, USER_ARG_NULL, gfp)/ksu_sulog_capture(KSU_SULOG_EVENT_IOCTL_GRANT_ROOT, NULL, *USER_ARG_NULL, gfp)/' "$SULOG_EVENT"
+            ok "已按值签名修正 SukiSU sulog USER_ARG_NULL 解引用"
+        else
+            skip "SukiSU sulog USER_ARG_NULL 已匹配值签名"
+        fi
+        assert_contains "$SULOG_EVENT" 'NULL, *USER_ARG_NULL, gfp)' "SukiSU sulog 值参数修正"
+    elif grep -qF 'KSU_SULOG_EVENT_IOCTL_GRANT_ROOT' "$SULOG_EVENT"; then
+        die "无法识别 ksu_sulog_capture() 的 argv_user 参数签名，不能安全修正 SukiSU sulog USER_ARG_NULL。"
+    else
+        skip "当前 SukiSU sulog 没有需要修正的 grant_root 调用"
+    fi
 else
     skip "当前 SukiSU 不需要 sulog USER_ARG_NULL 修正"
 fi
