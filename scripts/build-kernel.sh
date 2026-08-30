@@ -135,15 +135,28 @@ OUT_CONFIG="$KERNEL_DIR/out/.config" bash "$SCRIPT_DIR/verify-config.sh"
 section "编译内核"
 
 START_TS=$(date +%s)
+BUILD_LOG="$WORKSPACE/build-kernel.log"
+rm -f "$BUILD_LOG"
 
-make "${MAKE_ARGS[@]}" Image || die "内核编译失败。
+# GitHub 对公开仓库的完整 job log 下载可能需要权限。把 make Image 的
+# 输出同步保存成失败诊断产物，后续不用依赖 Actions 私有日志接口。
+set +e
+make "${MAKE_ARGS[@]}" Image 2>&1 | tee "$BUILD_LOG"
+MAKE_RC=${PIPESTATUS[0]}
+set -e
+
+if [ "$MAKE_RC" -ne 0 ]; then
+    die "内核编译失败。
+
+     已保存编译日志: $BUILD_LOG
 
      排查建议：
-     1. 往上翻第一条 error（不是最后一条）——后面的多半是连锁反应
+     1. 看 build-kernel.log 里的第一条 error（不是最后一条）——后面的多半是连锁反应
      2. 若报找不到 vendor/ 下的文件 → prepare-vendor-stubs.sh 没覆盖到，
         把缺的文件补进那个脚本
      3. 若报某个 SUSFS 宏未定义 → SUSFS 补丁的头部 hunk 被跳过了，
         看 setup-susfs.sh 的上下文适配是否覆盖当前 sublevel"
+fi
 
 ELAPSED=$(( $(date +%s) - START_TS ))
 ok "编译完成，耗时 $((ELAPSED / 60)) 分 $((ELAPSED % 60)) 秒"

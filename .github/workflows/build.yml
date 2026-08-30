@@ -405,9 +405,12 @@ jobs:
         id: ksu
         run: bash scripts/setup-ksu.sh
 
-      - name: 集成 SUSFS
+      - name: 准备 SUSFS 源码支持
         id: susfs
-        if: inputs.enable_susfs
+        # SukiSU-Ultra 的 builtin 分支源码会引用 SUSFS 头文件/接口。
+        # 即使最终关闭 CONFIG_KSU_SUSFS，也要先把 SUSFS 源码与受 #ifdef
+        # 保护的 hook 补丁准备好；真正是否启用由 apply-defconfig.sh 决定。
+        if: inputs.enable_susfs || inputs.ksu_ref == 'builtin'
         run: bash scripts/setup-susfs.sh
 
       - name: 应用 defconfig
@@ -466,6 +469,10 @@ jobs:
         run: |
           DIAG="$GITHUB_WORKSPACE/diagnostics"
           mkdir -p "$DIAG"
+
+          # make Image 的完整输出。公开仓库的 job log 下载接口可能返回 403，
+          # 所以这里把编译日志放进 diagnostics artifact，便于无权限排查第一条 error。
+          cp "$WORKSPACE/build-kernel.log" "$DIAG/build-kernel.log" 2>/dev/null || true
 
           # 最终 .config —— 排查「某个选项为什么没生效」的必需品
           cp "$WORKSPACE/common/out/.config" "$DIAG/final.config" 2>/dev/null || true

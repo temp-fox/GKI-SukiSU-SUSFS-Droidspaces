@@ -259,12 +259,15 @@ require_file "$KERNEL_DIR/fs/susfs.c"       "SUSFS 核心实现"
 require_file "$KERNEL_DIR/include/linux/susfs.h"
 require_file "$KERNEL_DIR/include/linux/susfs_def.h"
 
-ok "SUSFS 集成完成 —— 版本 $SUSFS_VERSION"
-
-put_env SUSFS_VERSION "$SUSFS_VERSION"
-put_env SUSFS_SHA     "$SUSFS_SHA"
-put_env SUSFS_DATE    "$SUSFS_DATE"
-put_output susfs_version "$SUSFS_VERSION"
+if is_true "${ENABLE_SUSFS:-false}"; then
+    ok "SUSFS 集成完成 —— 版本 $SUSFS_VERSION"
+    put_env SUSFS_VERSION "$SUSFS_VERSION"
+    put_env SUSFS_SHA     "$SUSFS_SHA"
+    put_env SUSFS_DATE    "$SUSFS_DATE"
+    put_output susfs_version "$SUSFS_VERSION"
+else
+    ok "SUSFS 源码支持已准备 —— 当前构建未启用 CONFIG_KSU_SUSFS"
+fi
 
 # -----------------------------------------------------------------------------
 # 7. 版本兼容性提醒
@@ -274,12 +277,14 @@ put_output susfs_version "$SUSFS_VERSION"
 # 是好的，但用户会以为构建失败。构建期提醒，省得刷完机再回头查。
 # -----------------------------------------------------------------------------
 
-MANAGER_MAX="2.1.0"
-SUSFS_NUM="${SUSFS_VERSION#v}"
-if [ "$(printf '%s\n%s\n' "$MANAGER_MAX" "$SUSFS_NUM" | sort -V | tail -1)" = "$SUSFS_NUM" ] \
-   && [ "$SUSFS_NUM" != "$MANAGER_MAX" ]; then
-    warn "SUSFS $SUSFS_VERSION 高于已知的管理器 assets 上限 v$MANAGER_MAX。"
-    warn "  内核侧不受影响，但管理器 SUSFS 页面可能报 susfs_binary_not_found。"
-    warn "  应对：用与本次构建同期的管理器 APK，或用 susfs_ref 钉死到旧版本。"
-    warn "  详见 docs/troubleshooting.md"
+if is_true "${ENABLE_SUSFS:-false}"; then
+    MANAGER_MAX="2.1.0"
+    SUSFS_NUM="${SUSFS_VERSION#v}"
+    if [ "$(printf '%s\n%s\n' "$MANAGER_MAX" "$SUSFS_NUM" | sort -V | tail -1)" = "$SUSFS_NUM" ] \
+       && [ "$SUSFS_NUM" != "$MANAGER_MAX" ]; then
+        warn "SUSFS $SUSFS_VERSION 高于已知的管理器 assets 上限 v$MANAGER_MAX。"
+        warn "  内核侧不受影响，但管理器 SUSFS 页面可能报 susfs_binary_not_found。"
+        warn "  应对：用与本次构建同期的管理器 APK，或用 susfs_ref 钉死到旧版本。"
+        warn "  详见 docs/troubleshooting.md"
+    fi
 fi
