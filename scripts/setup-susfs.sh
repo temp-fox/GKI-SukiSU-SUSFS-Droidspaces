@@ -254,6 +254,45 @@ if grep -qE 'DEFAULT_KSU_MNT_ID|susfs_mnt_id_ida|CL_COPY_MNT_NS' fs/namespace.c;
     fi
 fi
 
+# SukiSU builtin 与 susfs4ksu 主补丁之间的接口必须精确匹配。
+# 这是 SUSFS 接入层的适配，不属于 setup-ksu.sh：
+#   - SukiSU 提供 ksu_handle_* 实现
+#   - susfs4ksu 的 GKI patch 负责把这些实现接到 fs/read_write.c、reboot.c 等 syscall 路径
+# 当前 builtin 分支里 ksu_handle_sys_read() 是三参数；部分 susfs4ksu patch 仍按旧的一参数声明/调用。
+# 一参数调用在 C ABI 上可能“凑巧能跑”，但会让 init.rc 注入链路不可证明，进而影响
+# /data/adb/ksud post-fs-data / services 以及管理器里 SUSFS 基本设置的执行结果。
+KSU_KSUD_C="$WORKSPACE/KernelSU/kernel/runtime/ksud.c"
+KSU_DISPATCH_C="$WORKSPACE/KernelSU/kernel/supercall/dispatch.c"
+require_file "$KSU_KSUD_C" "SukiSU ksud runtime"
+require_file "$KSU_DISPATCH_C" "SukiSU supercall 分发器"
+
+if grep -qE 'int[[:space:]]+ksu_handle_sys_read\([[:space:]]*unsigned[[:space:]]+int[[:space:]]+fd,[[:space:]]*char[[:space:]]+__user[[:space:]]+\*\*[[:space:]]*buf_ptr,[[:space:]]*size_t[[:space:]]+\*[[:space:]]*count_ptr[[:space:]]*\)' "$KSU_KSUD_C"; then
+    if grep -qF 'extern __attribute__((cold)) void ksu_handle_sys_read(unsigned int fd);' fs/read_write.c; then
+        warn "fs/read_write.c 仍按旧一参数 ksu_handle_sys_read 接入，改为匹配 SukiSU builtin 的三参数接口"
+        sed -i 's|extern __attribute__((cold)) void ksu_handle_sys_read(unsigned int fd);|extern __attribute__((cold)) int ksu_handle_sys_read(unsigned int fd, char __user **buf_ptr, size_t *count_ptr);|' fs/read_write.c
+    fi
+    if grep -qF 'ksu_handle_sys_read(fd);' fs/read_write.c; then
+        sed -i 's|ksu_handle_sys_read(fd);|ksu_handle_sys_read(fd, \&buf, \&count);|' fs/read_write.c
+    fi
+    assert_contains fs/read_write.c 'ksu_handle_sys_read(fd, &buf, &count);' "SUSFS read hook 三参数接入"
+elif grep -qE 'void[[:space:]]+ksu_handle_sys_read\([[:space:]]*unsigned[[:space:]]+int[[:space:]]+fd[[:space:]]*\)' "$KSU_KSUD_C"; then
+    assert_contains fs/read_write.c 'ksu_handle_sys_read(fd);' "SUSFS read hook 一参数接入"
+else
+    die "无法识别 SukiSU ksu_handle_sys_read() 签名，不能安全接入 SUSFS init.rc read hook。"
+fi
+
+if grep -qF 'magic2 == SUSFS_MAGIC' "$KSU_DISPATCH_C"; then
+    assert_contains kernel/reboot.c 'ksu_handle_sys_reboot(magic1, magic2, cmd, &arg);' "SUSFS reboot syscall 接入"
+else
+    die "SukiSU supercall 分发器没有 SUSFS_MAGIC 分支；当前 ksu_ref 不适合启用 SUSFS。"
+fi
+assert_contains fs/stat.c 'ksu_handle_vfs_fstat(fd, &stat->size);' "SUSFS init.rc fstat 接入"
+assert_contains kernel/sys.c 'ksu_handle_setresuid(ruid, euid, suid);' "SUSFS setresuid 接入"
+assert_contains fs/exec.c 'ksu_handle_execveat(&fd, &filename, &argv, &envp, &flags);' "SUSFS execveat 接入"
+assert_contains fs/open.c 'ksu_handle_faccessat(&dfd, &fname, &mode, NULL);' "SUSFS faccessat 接入"
+assert_contains fs/stat.c 'ksu_handle_stat(&dfd, &filename, &flags);' "SUSFS stat 接入"
+ok "SukiSU builtin / SUSFS GKI hook 接口一致"
+
 # 关键文件必须落地
 require_file "$KERNEL_DIR/fs/susfs.c"       "SUSFS 核心实现"
 require_file "$KERNEL_DIR/include/linux/susfs.h"

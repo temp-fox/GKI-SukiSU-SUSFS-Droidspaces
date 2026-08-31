@@ -76,18 +76,77 @@ if is_true "${ENABLE_SUSFS:-false}"; then
     log "SUSFS:"
     need_y CONFIG_KSU_SUSFS "SUSFS 总开关。没有它 ksud susfs 全线不可用"
 
-    # 主要子功能。缺哪个都不会导致构建失败，但会让对应能力静默消失。
+    # 当前 SukiSU builtin 分支真实提供的 SUSFS 子功能。缺哪个都不会导致构建失败，
+    # 但会让对应能力静默消失，尤其是 ENABLE_LOG / SPOOF_UNAME 会直接影响
+    # 管理器「基本设置」里的 enable-log、set-uname 等命令。
     for c in CONFIG_KSU_SUSFS_SUS_PATH \
              CONFIG_KSU_SUSFS_SUS_MOUNT \
              CONFIG_KSU_SUSFS_SUS_KSTAT \
              CONFIG_KSU_SUSFS_SPOOF_UNAME \
-             CONFIG_KSU_SUSFS_ENABLE_LOG; do
+             CONFIG_KSU_SUSFS_ENABLE_LOG \
+             CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS \
+             CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG \
+             CONFIG_KSU_SUSFS_OPEN_REDIRECT \
+             CONFIG_KSU_SUSFS_SUS_MAP; do
         need_y "$c" "SUSFS 子功能"
     done
 
     # 内核侧文件必须真的在树里 —— 光有配置项不够
     require_file "$KERNEL_DIR/fs/susfs.c" "SUSFS 实现文件"
     printf '  [✓] %-45s\n' "fs/susfs.c 存在"
+
+    # syscall hook 接入必须与 SukiSU builtin 的函数签名一致。这里不是为了编译过，
+    # 而是为了防止 SUSFS 命令通道、init.rc 注入、post-fs-data/services 在刷机后才失败。
+    require_file "$KERNEL_DIR/fs/read_write.c" "read hook 源码"
+    require_file "$KERNEL_DIR/kernel/reboot.c" "reboot hook 源码"
+    require_file "$KERNEL_DIR/fs/stat.c" "stat hook 源码"
+    require_file "$KERNEL_DIR/kernel/sys.c" "setresuid hook 源码"
+    require_file "$KERNEL_DIR/fs/exec.c" "execveat hook 源码"
+    require_file "$KERNEL_DIR/fs/open.c" "faccessat hook 源码"
+
+    KSU_KSUD_C="$KERNEL_DIR/drivers/kernelsu/runtime/ksud.c"
+    if [ -f "$KSU_KSUD_C" ] \
+       && grep -qE 'int[[:space:]]+ksu_handle_sys_read\([[:space:]]*unsigned[[:space:]]+int[[:space:]]+fd,[[:space:]]*char[[:space:]]+__user[[:space:]]+\*\*[[:space:]]*buf_ptr,[[:space:]]*size_t[[:space:]]+\*[[:space:]]*count_ptr[[:space:]]*\)' "$KSU_KSUD_C"; then
+        if grep -q 'ksu_handle_sys_read(fd, &buf, &count);' "$KERNEL_DIR/fs/read_write.c"; then
+            printf '  [✓] %-45s\n' "read hook 三参数接入"
+        else
+            printf '  [✗] %-45s ← %s\n' "read hook" \
+                "未按 SukiSU builtin 三参数 ksu_handle_sys_read(fd, &buf, &count) 接入"
+            FAIL=1
+        fi
+    elif [ -f "$KSU_KSUD_C" ] \
+         && grep -qE 'void[[:space:]]+ksu_handle_sys_read\([[:space:]]*unsigned[[:space:]]+int[[:space:]]+fd[[:space:]]*\)' "$KSU_KSUD_C"; then
+        if grep -q 'ksu_handle_sys_read(fd);' "$KERNEL_DIR/fs/read_write.c"; then
+            printf '  [✓] %-45s\n' "read hook 一参数接入"
+        else
+            printf '  [✗] %-45s ← %s\n' "read hook" \
+                "未按当前 SukiSU 一参数 ksu_handle_sys_read(fd) 接入"
+            FAIL=1
+        fi
+    else
+        printf '  [✗] %-45s ← %s\n' "read hook" \
+            "无法识别 SukiSU ksu_handle_sys_read() 签名"
+        FAIL=1
+    fi
+
+    for item in \
+        "kernel/reboot.c:ksu_handle_sys_reboot(magic1, magic2, cmd, &arg);:reboot SUSFS 命令通道" \
+        "fs/stat.c:ksu_handle_vfs_fstat(fd, &stat->size);:init.rc fstat 扩容" \
+        "kernel/sys.c:ksu_handle_setresuid(ruid, euid, suid);:zygote setresuid hook" \
+        "fs/exec.c:ksu_handle_execveat(&fd, &filename, &argv, &envp, &flags);:execveat hook" \
+        "fs/open.c:ksu_handle_faccessat(&dfd, &fname, &mode, NULL);:faccessat hook" \
+        "fs/stat.c:ksu_handle_stat(&dfd, &filename, &flags);:stat hook"; do
+        file="${item%%:*}"
+        rest="${item#*:}"
+        pattern="${rest%%:*}"
+        label="${rest#*:}"
+        if grep -qF "$pattern" "$KERNEL_DIR/$file"; then
+            printf '  [✓] %-45s\n' "$label"
+        else
+            printf '  [✗] %-45s ← %s\n' "$label" "源码中未找到必要接入点：$pattern"
+            FAIL=1
+        fi
+    done
 fi
 
 # -----------------------------------------------------------------------------
