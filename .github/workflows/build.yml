@@ -406,6 +406,10 @@ jobs:
         if: inputs.enable_susfs || inputs.ksu_ref == 'builtin'
         run: bash scripts/setup-susfs.sh
 
+      - name: 接入 SukiSU built-in hook
+        if: inputs.ksu_ref == 'builtin'
+        run: bash scripts/setup-ksu-builtin-hooks.sh
+
       - name: 应用 defconfig
         run: bash scripts/apply-defconfig.sh
 

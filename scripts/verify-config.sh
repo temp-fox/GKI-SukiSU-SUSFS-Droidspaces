@@ -66,6 +66,23 @@ if is_true "${ENABLE_KSU:-true}"; then
     need_y CONFIG_KSU "root 功能的总开关"
     need_not_y CONFIG_KSU_DISABLE_MANAGER "启用它管理器 App 将无法被内核识别"
     need_not_y CONFIG_KSU_DISABLE_POLICY   "启用它会关掉 App Profile 授权机制"
+
+    # SukiSU builtin 的非 SUSFS 路径也必须能安装 [ksu_driver] fd。
+    # 只检查 CONFIG_KSU=y 不够；用户已经实测过「只开 SukiSU」会退到 LKM，
+    # 而开启 SUSFS 后因为 SUSFS GKI patch 接了 reboot syscall 才能显示 built-in。
+    # 这个 hook 属于 SukiSU built-in 自身，不属于 SUSFS。
+    if grep -q '^# CONFIG_KSU_SUSFS is not set$' "$CFG"; then
+        require_file "$KERNEL_DIR/kernel/reboot.c" "reboot hook 源码"
+        if grep -qF 'SukiSU built-in reboot hook' "$KERNEL_DIR/kernel/reboot.c" \
+           && grep -qF '!defined(CONFIG_KSU_SUSFS)' "$KERNEL_DIR/kernel/reboot.c" \
+           && grep -qF 'ksu_handle_sys_reboot(magic1, magic2, cmd,' "$KERNEL_DIR/kernel/reboot.c"; then
+            printf '  [✓] %-45s\n' "SukiSU built-in reboot hook"
+        else
+            printf '  [✗] %-45s ← %s\n' "SukiSU built-in reboot hook" \
+                "CONFIG_KSU_SUSFS=n 时缺少非 SUSFS 的 [ksu_driver] fd 安装通道"
+            FAIL=1
+        fi
+    fi
 fi
 
 # -----------------------------------------------------------------------------
