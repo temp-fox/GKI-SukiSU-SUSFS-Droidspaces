@@ -109,10 +109,10 @@ on:
 
       # ⑤ 外部源码 / 补丁增强
       enable_rekernel:
-        description: '【5 外部源码】启用 Re-Kernel（改善后台进程冻结行为）'
+        description: '【5 外部源码】启用 Re-Kernel（改善后台进程冻结行为，RMX5062 实验项）'
         required: false
         type: boolean
-        default: true
+        default: false
 
       enable_ntsync:
         description: '【5 外部补丁】启用 NTsync（Winlator 需要）。⚠️ 会开放 /dev/ntsync'
@@ -134,10 +134,16 @@ on:
         default: ''
 
       output_boot_img:
-        description: '【6 输出】同时产出 boot.img'
+        description: '【6 输出】生成 boot.img（需配合 output_debug_artifacts 才会上传）'
         required: false
         type: boolean
-        default: true
+        default: false
+
+      output_debug_artifacts:
+        description: '【6 输出】额外上传 Image / boot.img / final-config 调试产物'
+        required: false
+        type: boolean
+        default: false
 
       ccache_reset:
         description: '【6 维护】丢弃 ccache，强制冷编译'
@@ -156,7 +162,7 @@ on:
       kabi_slots:          { required: false, type: string,  default: 'auto' }
       enable_kpm:          { required: false, type: boolean, default: true }
       enable_network_ext:  { required: false, type: boolean, default: true }
-      enable_rekernel:     { required: false, type: boolean, default: true }
+      enable_rekernel:     { required: false, type: boolean, default: false }
       enable_bbr:          { required: false, type: boolean, default: false }
       bbr_as_default:      { required: false, type: boolean, default: false }
       enable_ntsync:       { required: false, type: boolean, default: false }
@@ -164,7 +170,8 @@ on:
       enable_config_spoof: { required: false, type: boolean, default: true }
       config_spoof_rules:  { required: false, type: string,  default: '' }
       kernel_suffix:       { required: false, type: string,  default: '' }
-      output_boot_img:     { required: false, type: boolean, default: true }
+      output_boot_img:     { required: false, type: boolean, default: false }
+      output_debug_artifacts: { required: false, type: boolean, default: false }
       ccache_reset:        { required: false, type: boolean, default: false }
     outputs:
       artifact_name: { value: '${{ jobs.build.outputs.artifact_name }}' }
@@ -208,6 +215,7 @@ jobs:
       ENABLE_CONFIG_SPOOF:  ${{ inputs.enable_config_spoof }}
       CONFIG_SPOOF_RULES:   ${{ inputs.config_spoof_rules }}
       OUTPUT_BOOT_IMG:      ${{ inputs.output_boot_img }}
+      OUTPUT_DEBUG_ARTIFACTS: ${{ inputs.output_debug_artifacts }}
 
     steps:
       # =======================================================================
@@ -302,6 +310,7 @@ jobs:
             NTsync        : ${{ inputs.enable_ntsync }}
             BBG           : ${{ inputs.enable_bbg }}
             config 伪装   : ${{ inputs.enable_config_spoof }}
+            调试产物      : ${{ inputs.output_debug_artifacts }}
             特性 hash     : $FEATURE_HASH
           ================================================================
           EOF
@@ -454,6 +463,7 @@ jobs:
           retention-days: 30
 
       - name: 上传内核 Image
+        if: inputs.output_debug_artifacts
         uses: actions/upload-artifact@v4
         with:
           name: ${{ steps.package.outputs.artifact_name }}-Image
@@ -463,7 +473,7 @@ jobs:
           retention-days: 30
 
       - name: 上传 boot.img
-        if: inputs.output_boot_img
+        if: inputs.output_debug_artifacts && inputs.output_boot_img
         uses: actions/upload-artifact@v4
         with:
           name: ${{ steps.package.outputs.artifact_name }}-boot
@@ -482,6 +492,7 @@ jobs:
           retention-days: 30
 
       - name: 上传最终内核配置
+        if: inputs.output_debug_artifacts
         uses: actions/upload-artifact@v4
         with:
           name: ${{ steps.package.outputs.artifact_name }}-final-config
@@ -558,6 +569,8 @@ jobs:
             echo "| SukiSU Manager | ${KSU_MANAGER_PACKAGE:-未设置} / ${KSU_EXPECTED_SIZE:-未设置} |"
             echo "| SUSFS | ${SUSFS_VERSION:-未启用} |"
             echo "| Droidspaces | ${{ inputs.enable_droidspaces }} (kABI ${KABI_SLOTS:-?}) |"
+            echo "| 默认成功 artifact | AnyKernel3 / build-info |"
+            echo "| 调试 artifact | ${{ inputs.output_debug_artifacts }} |"
             echo "| 版本串 | \`${KERNEL_VERSION_STRING:-未知}\` |"
             echo "| 补丁冲突 | ${REJ_COUNT:-0} |"
             echo

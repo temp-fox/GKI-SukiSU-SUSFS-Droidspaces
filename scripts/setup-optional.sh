@@ -57,7 +57,7 @@ if is_true "${ENABLE_ZRAM:-false}"; then
     # ⚠️ 不要把 ZRAM/ZSMALLOC 改成内建（=y）。
     #
     # 本项目早期版本这么做过，代价是刷入后所有 app 都打不开：
-    # 原厂的 oplus_bsp_hybridswap_zram 模块会在 memcg 里注册 15 个���有控制
+    # 原厂的 oplus_bsp_hybridswap_zram 模块会在 memcg 里注册 15 个私有控制
     # 文件，其中 memory.app_uid 是 libprocessgroup 建进程组时硬编码要写的。
     # 编成内建后该模块加载不了，文件不存在，Zygote 每 fork 一个 app 就 abort。
     # 详见 config/zram.config 的注释。
@@ -80,77 +80,54 @@ fi
 # =============================================================================
 # Re-Kernel —— 改善后台进程冻结/唤醒行为
 #
-# 上游 Sakion-Team/Re-Kernel 提供两种形态：
-#   Integrate/rekernel/  in-tree 版
-#   LKM-Source/          外置模块版（源码更完整，上游主要维护这份）
-# 我们要内建，所以拿 LKM-Source 的源码，把 Makefile/Kconfig 改成 in-tree 形式。
+# 上游 Sakion-Team/Re-Kernel 当前对 Android 5.10+ / GKI 的推荐形态是 LKM：
+# README_CN 写明内核 >= 5.10 使用 Magisk 模块或手动 insmod；上游自己的
+# build-lkm/ddk-lkm workflow 也是把 LKM-Source 编译成 rekernel.ko。
+# Integrate/rekernel/ 是给 <= 5.4 或非 GKI/QGKI 内核做源码级集成的旧路径。
+#
+# 因此不能再把 LKM-Source 强行改成 in-tree 驱动塞进 6.1 GKI 的 Image：
+# 这和上游支持路径相反，并且用户已在 RMX5062 上实测会卡死/重启。
+# 参考 sm8650_kernel 的 newrealme flow，它只写 CONFIG_REKERNEL=y，没有拉取
+# LKM-Source 强转 in-tree；若源码树本身没有 Re-Kernel Kconfig，这一步实际会
+# 被 Kconfig 丢弃，不会把 Re-Kernel 编进内核。
 # =============================================================================
 
 if is_true "${ENABLE_REKERNEL:-false}"; then
     section "可选特性：Re-Kernel"
 
-    REK_DIR="$KERNEL_DIR/drivers/rekernel"
-
-    if [ -d "$REK_DIR" ] && [ -f "$REK_DIR/Kconfig" ]; then
-        skip "Re-Kernel 已集成"
-    else
-        TMP_REK=/tmp/rekernel
-        rm -rf "$TMP_REK"
-        log "克隆 Sakion-Team/Re-Kernel"
-        git clone --depth=1 https://github.com/Sakion-Team/Re-Kernel.git "$TMP_REK" \
+    REK_SRC="$WORKSPACE/Re-Kernel"
+    if [ ! -d "$REK_SRC/.git" ]; then
+        rm -rf "$REK_SRC"
+        log "克隆 Sakion-Team/Re-Kernel（只用于核对上游支持形态，不强转 in-tree）"
+        git clone --depth=1 https://github.com/Sakion-Team/Re-Kernel.git "$REK_SRC" \
             || die "无法克隆 Re-Kernel"
-
-        require_dir "$TMP_REK/LKM-Source" "Re-Kernel 源码目录"
-        rm -rf "$REK_DIR"
-        mkdir -p "$REK_DIR"
-        cp -a "$TMP_REK/LKM-Source/." "$REK_DIR/"
-
-        # --- 外置模块 → in-tree 驱动 -------------------------------------
-        REK_MK="$REK_DIR/Makefile"
-        require_file "$REK_MK" "Re-Kernel Makefile"
-
-        # obj-m := rekernel.o  →  obj-$(CONFIG_REKERNEL) += rekernel.o
-        sed -i 's|^obj-m *:= *rekernel\.o$|obj-$(CONFIG_REKERNEL) += rekernel.o|' "$REK_MK"
-        assert_contains "$REK_MK" 'obj-$(CONFIG_REKERNEL)' "Re-Kernel Makefile 转 in-tree"
-
-        grep -qF 'ccflags-$(CONFIG_REKERNEL_LEGACY_NETLINK) += -DLEGACY_NETLINK' "$REK_MK" \
-            || echo 'ccflags-$(CONFIG_REKERNEL_LEGACY_NETLINK) += -DLEGACY_NETLINK' >> "$REK_MK"
-
-        # in-tree 编译不需要 depends on MODULES，留着会让选项无法选中
-        sed -i '/^[[:space:]]*depends on MODULES[[:space:]]*$/d' "$REK_DIR/Kconfig"
-
-        # --- 挂载到驱动树 -------------------------------------------------
-        DRV_KCONFIG="$KERNEL_DIR/drivers/Kconfig"
-        DRV_MAKEFILE="$KERNEL_DIR/drivers/Makefile"
-
-        if ! grep -qF 'source "drivers/rekernel/Kconfig"' "$DRV_KCONFIG"; then
-            sed -i '/^endmenu$/i source "drivers/rekernel/Kconfig"' "$DRV_KCONFIG"
-            assert_contains "$DRV_KCONFIG" 'source "drivers/rekernel/Kconfig"' \
-                "Re-Kernel Kconfig 挂载"
-        fi
-
-        if ! grep -qF 'obj-$(CONFIG_REKERNEL) += rekernel/' "$DRV_MAKEFILE"; then
-            echo 'obj-$(CONFIG_REKERNEL) += rekernel/' >> "$DRV_MAKEFILE"
-        fi
-
-        # --- 修正 include 路径 --------------------------------------------
-        # 外置模块用尖括号包含 binder 内部头，in-tree 编译得用引号相对路径
-        REK_BINDER="$REK_DIR/rekernel_binder.c"
-        if [ -f "$REK_BINDER" ]; then
-            sed -i 's|#include <../android/binder_internal.h>|#include "../android/binder_internal.h"|g' \
-                "$REK_BINDER"
-            # binder_internal.h 用了 DEFINE_SHOW_ATTRIBUTE，需要 seq_file.h
-            grep -qF '#include <linux/seq_file.h>' "$REK_BINDER" \
-                || sed -i '/#include <linux\/kprobes.h>/a #include <linux/seq_file.h>' "$REK_BINDER"
-        fi
-
-        rm -rf "$TMP_REK"
-        ok "Re-Kernel 源码已集成为 in-tree 驱动"
     fi
 
-    enable_config CONFIG_REKERNEL
-    enable_config_if_defined CONFIG_REKERNEL_NETWORK
-    ok "Re-Kernel 已启用"
+    require_dir "$REK_SRC/LKM-Source" "Re-Kernel LKM 源码目录"
+    require_dir "$REK_SRC/Integrate/rekernel" "Re-Kernel 旧 in-tree 集成目录"
+
+    if config_defined CONFIG_REKERNEL; then
+        enable_config CONFIG_REKERNEL
+
+        # 参考 newrealme flow 只启用 CONFIG_REKERNEL，本项目不默认打开网络监听。
+        # 上游 Integrate Kconfig 里 CONFIG_REKERNEL_NETWORK 默认 n；LKM 新版也只在
+        # 用户态显式 monitor uid 后才监听网络。这里保持最小化，避免扩大不稳定面。
+        if config_defined CONFIG_REKERNEL_NETWORK; then
+            disable_config CONFIG_REKERNEL_NETWORK
+        fi
+
+        ok "Re-Kernel 已按现有源码树的原生 Kconfig 启用"
+    else
+        die "请求启用 Re-Kernel，但当前 RMX5062 6.1 GKI 源码树没有原生 CONFIG_REKERNEL。
+
+     已核对上游 Sakion-Team/Re-Kernel：Android 5.10+ / GKI 推荐编译 rekernel.ko
+     作为 LKM 使用；Integrate/rekernel 是给 <=5.4 或非 GKI/QGKI 内核的源码级
+     集成路径。旧脚本把 LKM-Source 强行转成 in-tree 驱动编进 Image，这不是上游
+     6.1 GKI 支持方式，且已被实机验证会卡死/重启。
+
+     因此这里改为硬失败，避免继续产出危险 AK3。需要 Re-Kernel 时应单独按上游
+     LKM/DDK 路径构建 rekernel.ko；本内核 AK3 默认不再内建 Re-Kernel。"
+    fi
 fi
 
 # =============================================================================

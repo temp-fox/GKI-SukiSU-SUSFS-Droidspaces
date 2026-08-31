@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 输出产物：AnyKernel3 刷机包 + 内核 Image + boot.img + 构建信息。
+# 输出产物：默认准备 AnyKernel3 刷机包与构建信息；调试时可额外导出 Image / boot.img。
 
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -45,7 +45,8 @@ put_output artifact_name "$BASE_NAME"
 # =============================================================================
 # 构建信息
 #
-# 写成独立文件，同时放进 AnyKernel3 目录内，和 Image / boot.img 分开上传。
+# 写成独立文件，同时放进 AnyKernel3 目录内。默认只上传 AK3 和 build-info，
+# Image / boot.img 仅在 workflow 打开 output_debug_artifacts 时额外上传。
 # =============================================================================
 
 section "生成构建信息"
@@ -144,23 +145,25 @@ require_file "$AK3_OUT/Image"        "AnyKernel3 内核 Image"
 ok "AnyKernel3 目录: $(basename "$AK3_OUT")"
 
 # =============================================================================
-# 导出内核 Image
+# 导出内核 Image（调试产物）
 # =============================================================================
 
-section "导出内核 Image"
+if is_true "${OUTPUT_DEBUG_ARTIFACTS:-false}"; then
+    section "导出内核 Image"
 
-IMAGE_OUT="$OUT_DIR/${BASE_NAME}_Image"
-cp "$IMAGE" "$IMAGE_OUT"
-require_file "$IMAGE_OUT" "内核 Image"
-ok "Image: $(basename "$IMAGE_OUT") （$(du -h "$IMAGE_OUT" | cut -f1)）"
+    IMAGE_OUT="$OUT_DIR/${BASE_NAME}_Image"
+    cp "$IMAGE" "$IMAGE_OUT"
+    require_file "$IMAGE_OUT" "内核 Image"
+    ok "Image: $(basename "$IMAGE_OUT") （$(du -h "$IMAGE_OUT" | cut -f1)）"
+fi
 
 # =============================================================================
-# boot.img
+# boot.img（调试产物）
 #
 # android13 及以上的 GKI boot 分区不含 ramdisk，所以只需要 kernel。
 # =============================================================================
 
-if is_true "${OUTPUT_BOOT_IMG:-true}"; then
+if is_true "${OUTPUT_DEBUG_ARTIFACTS:-false}" && is_true "${OUTPUT_BOOT_IMG:-false}"; then
     section "构建 boot.img"
 
     MKBOOTIMG="${MKBOOTIMG:-$WORKSPACE/mkbootimg/mkbootimg.py}"

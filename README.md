@@ -20,7 +20,7 @@
 2. 打开 Actions 页面 → 左侧选「构建内核」→ 右上角 `Run workflow`
 3. 选择设备，其余保持默认即可
 4. 构建约 40–70 分钟（首次冷编译更久，之后有 ccache 会快很多）
-5. 从 Artifacts 下载 `AnyKernel3_*.zip`，用 TWRP / KernelFlasher 刷入
+5. 从 Artifacts 下载后缀为 `-AnyKernel3` 的 artifact，下载到的 zip 本身就是可刷 AK3 包，用 TWRP / KernelFlasher 刷入
 
 > 刷之前先备份 boot 分区。
 
@@ -38,7 +38,7 @@
 
 ## 输出产物说明
 
-构建成功后，Actions 会上传多个 artifact。它们不是“中间产物打成一个包”，而是按用途分开上传，方便按需要下载。
+构建成功后，Actions 默认只上传两个 artifact：`-AnyKernel3` 与 `-build-info`。`-Image`、`-boot`、`-final-config` 属于调试/手动打包产物，只有开启 `output_debug_artifacts` 时才额外上传。
 
 > GitHub 的 `upload-artifact` 下载时会自动把 artifact 目录打成一个 zip。也就是说，页面上下载到的 zip 是 GitHub 自动生成的外层下载包；本项目不会再额外生成一层 AK3 zip，避免 zip 套 zip。
 
@@ -54,9 +54,8 @@
 简单选择：
 
 - 日常刷机：下载 `-AnyKernel3`。
-- 想用 fastboot 或手动刷 boot 分区：下载 `-boot`。
-- 想自己重新打包或做底层对比：下载 `-Image`。
-- 想确认这次到底开了哪些功能：下载 `-build-info` 和 `-final-config`。
+- 想确认这次到底开了哪些功能：下载 `-build-info`（AK3 包内也会带一份）。
+- 想用 fastboot、手动刷 boot 分区、核对原始 `Image` 或最终 `.config`：先开启 `output_debug_artifacts`，再下载对应的 `-boot`、`-Image`、`-final-config`。
 
 ---
 
@@ -104,7 +103,7 @@ Actions 的 `Run workflow` 参数按功能归类排列：先选基础目标，�
 
 | 选项 | 默认 | 说明 |
 |---|---|---|
-| `enable_rekernel` | ✅ | 拉取 Re-Kernel 源码并集成为 in-tree 驱动，用于改善后台进程冻结/唤醒行为。当前 RMX5062 实机已发现开启后会卡死/重启，排查阶段建议关闭。 |
+| `enable_rekernel` | ❌ | 拉取 Re-Kernel 源码核对上游支持形态；RMX5062 默认不内建。上游 Android 5.10+ / GKI 推荐把 `LKM-Source` 编译成 `rekernel.ko` 使用，`Integrate/rekernel` 是给 <=5.4 或非 GKI/QGKI 内核的源码级集成路径。旧版强转 in-tree 已在实机验证会卡死/重启，因此不再默认启用。 |
 | `enable_ntsync` | ❌ | 下载并应用 NTsync 补丁，给 Winlator / Wine / Proton 类场景提供同步原语。会把 `/dev/ntsync` 开放给所有 App，不跑 Winlator 不建议开启。 |
 | `enable_bbg` | ❌ | 下载并运行 Baseband Guard 上游脚本，加入基带保护 LSM，防止误写非用户分区导致变砖。 |
 
@@ -113,7 +112,8 @@ Actions 的 `Run workflow` 参数按功能归类排列：先选基础目标，�
 | 选项 | 默认 | 说明 |
 |---|---|---|
 | `kernel_suffix` | 空 | 自定义内核后缀；留空使用设备配置，尽量贴近原厂版本串。 |
-| `output_boot_img` | ✅ | 同时产出 `boot.img`。AK3、Image、boot.img、build-info、final-config 会分开上传。 |
+| `output_boot_img` | ❌ | 是否在打包阶段生成 `boot.img`；只有同时开启 `output_debug_artifacts` 时才上传为 artifact。默认关闭，避免生成和上传非必要产物。 |
+| `output_debug_artifacts` | ❌ | 额外上传 `-Image`、`-boot`、`-final-config`。默认关闭，所以成功构建默认只输出 AK3 和 build-info。 |
 | `ccache_reset` | ❌ | 丢弃 ccache，强制冷编译。用于排除缓存造成的误判。 |
 
 ---
@@ -132,7 +132,7 @@ Actions 的 `Run workflow` 参数按功能归类排列：先选基础目标，�
 | zram | 否 | 本仓库 `config/zram.config` | 保持原厂期望的模块化内存压缩，避免 zram 内建导致 oplus hybridswap 模块加载失败、App 无法启动。 |
 | KPM | 否 | SukiSU-Ultra 源码内已有 Kconfig / 实现 | SukiSU 的内核补丁模块框架；启用主要是打开 `CONFIG_KPM` 和必要符号表配置。 |
 | BBR | 否 | 内核已有 TCP 拥塞控制算法配置 | 改善特定高延迟/移动网络/代理场景下的 TCP 吞吐；默认不改变 cubic，除非开启 `bbr_as_default`。 |
-| Re-Kernel | 是 | `https://github.com/Sakion-Team/Re-Kernel.git` | 目标是改善后台进程冻结/唤醒行为；当前 RMX5062 实测开启会卡死/重启，需单独排查。 |
+| Re-Kernel | 是 | `https://github.com/Sakion-Team/Re-Kernel.git` | 目标是改善后台进程冻结/唤醒行为。上游 README 写明 Android 5.10+ / GKI 推荐使用 LKM/Magisk 模块，`Integrate/rekernel` 是 <=5.4 或非 GKI/QGKI 的源码级集成路径；RMX5062 旧版强转 in-tree 已实测卡死/重启，因此默认不内建。 |
 | NTsync | 是 | `https://raw.githubusercontent.com/Goldzxcbug/Droidspaces_Kernel_patch/main/NTsync` | 给 Winlator / Wine / Proton 提供内核同步原语；不属于 Droidspaces 必需项。 |
 | BBG | 是 | `https://github.com/vc-teahouse/Baseband-guard/raw/main/setup.sh` | 加入基带保护，降低误刷/误写非用户分区造成变砖的风险。 |
 | config_data 伪装 | 否 | 本仓库 `patches/optional/config_data_spoof.patch` | 只改 `/proc/config.gz` 对外显示，不改真实 `.config` 和内核功能，用于避免配置泄露改装痕迹。 |
@@ -265,7 +265,7 @@ SUSFS 的 `HIDE_KSU_SUSFS_SYMBOLS` 负责。不开这个开关时，产物与不
 │   ├── apply-defconfig.sh      配置写入 + 版本串设置
 │   ├── verify-config.sh        编译前自检（硬失败）
 │   ├── build-kernel.sh         编译
-│   └── package.sh              打包 AnyKernel3 + boot.img
+│   └── package.sh              打包 AnyKernel3；按需导出 Image / boot.img
 ├── config/                     按功能拆分的 defconfig 片段
 ├── patches/                    补丁（每个都带中文说明其必要性）
 └── docs/
