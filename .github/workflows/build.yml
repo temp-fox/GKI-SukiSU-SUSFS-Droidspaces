@@ -18,46 +18,67 @@ permissions:
 on:
   workflow_dispatch:
     inputs:
+      # ① 基础目标
       device:
-        description: '目标设备（读取 devices/<设备>.env）'
+        description: '【1 基础】目标设备（读取 devices/<设备>.env）'
         required: true
         type: choice
         default: 'rmx5062'
         options:
           - 'rmx5062'
 
+      # ② SukiSU / SUSFS
       ksu_ref:
-        description: 'SukiSU-Ultra 分支/tag/commit。⚠️ 开 SUSFS 时必须用含 SUSFS 的分支（builtin）'
+        description: '【2 SukiSU】SukiSU-Ultra 分支/tag/commit。⚠️ 开 SUSFS 时必须用 builtin'
         required: false
         type: string
         default: 'builtin'
 
       ksu_version_override:
-        description: '手工指定 KSU_VERSION（留空自动推导）。用于匹配特定版本的管理器 APK'
+        description: '【2 SukiSU】手工指定 KSU_VERSION（留空自动推导），用于匹配特定管理器 APK'
         required: false
         type: string
         default: ''
 
+      enable_kpm:
+        description: '【2 SukiSU】启用 KPM（SukiSU 内核补丁模块框架）'
+        required: false
+        type: boolean
+        default: true
+
       enable_susfs:
-        description: '启用 SUSFS（挂载与文件隐藏）'
+        description: '【2 SUSFS】启用 SUSFS（挂载与文件隐藏）'
         required: false
         type: boolean
         default: true
 
       susfs_ref:
-        description: 'susfs4ksu 的 commit（留空用分支最新）。钉死版本可复现历史构建'
+        description: '【2 SUSFS】susfs4ksu 的 commit（留空用分支最新），用于复现历史构建'
         required: false
         type: string
         default: ''
 
+      enable_config_spoof:
+        description: '【2 隐藏】伪装 /proc/config.gz，隐藏 CONFIG_KSU 等改装痕迹（不影响功能）'
+        required: false
+        type: boolean
+        default: true
+
+      config_spoof_rules:
+        description: '【2 隐藏】伪装规则，如 "CONFIG_KSU=n CONFIG_KPM=n"；留空用默认规则'
+        required: false
+        type: string
+        default: ''
+
+      # ③ Droidspaces 容器支持
       enable_droidspaces:
-        description: '启用 Droidspaces 容器支持'
+        description: '【3 Droidspaces】启用容器所需 namespace / devtmpfs / kABI 修正'
         required: false
         type: boolean
         default: true
 
       kabi_slots:
-        description: 'kABI 槽位。auto = 用设备配置的默认值。⚠️ 选错会导致刷机后 bootloop'
+        description: '【3 Droidspaces】kABI 槽位。auto = 用设备配置默认值。⚠️ 选错会 bootloop'
         required: false
         type: choice
         default: 'auto'
@@ -67,74 +88,59 @@ on:
           - '3_4_5'
           - '1_2_3'
 
-      enable_kpm:
-        description: '启用 KPM（SukiSU 内核补丁模块框架）'
-        required: false
-        type: boolean
-        default: true
-
+      # ④ 内核 config / 可选增强
       enable_network_ext:
-        description: '启用网络功能扩展（ipset / 高级 iptables，容器跑 Docker/UFW 需要）'
-        required: false
-        type: boolean
-        default: true
-
-      enable_rekernel:
-        description: '启用 Re-Kernel（改善后台进程冻结行为）'
+        description: '【4 Config】网络扩展：ipset / 高级 iptables，容器跑 Docker/UFW 需要'
         required: false
         type: boolean
         default: true
 
       enable_bbr:
-        description: '编入 BBR 拥塞控制算法（默认算法仍是 cubic）'
+        description: '【4 Config】编入 BBR 拥塞控制算法（默认算法仍是 cubic）'
         required: false
         type: boolean
         default: false
 
       bbr_as_default:
-        description: '把 BBR 设为默认拥塞控制算法（需同时开启 enable_bbr）'
+        description: '【4 Config】把 BBR 设为默认拥塞控制算法（需同时开启 enable_bbr）'
         required: false
         type: boolean
         default: false
 
+      # ⑤ 外部源码 / 补丁增强
+      enable_rekernel:
+        description: '【5 外部源码】启用 Re-Kernel（改善后台进程冻结行为）'
+        required: false
+        type: boolean
+        default: true
+
       enable_ntsync:
-        description: '启用 NTsync（Winlator 需要）。⚠️ 会把 /dev/ntsync 开放给所有 App'
+        description: '【5 外部补丁】启用 NTsync（Winlator 需要）。⚠️ 会开放 /dev/ntsync'
         required: false
         type: boolean
         default: false
 
       enable_bbg:
-        description: '启用基带保护 BBG（防误刷变砖）'
+        description: '【5 外部脚本】启用基带保护 BBG（防误刷变砖）'
         required: false
         type: boolean
         default: false
 
-      enable_config_spoof:
-        description: '伪装 /proc/config.gz，隐藏 CONFIG_KSU 等改装痕迹（不影响内核功能）'
-        required: false
-        type: boolean
-        default: true
-
-      config_spoof_rules:
-        description: '伪装规则，形如 "CONFIG_KSU=n CONFIG_KPM=n"。留空用默认（隐藏 KSU/SUSFS/KPM）'
-        required: false
-        type: string
-        default: ''
-
+      # ⑥ 输出与维护
       kernel_suffix:
-        description: '自定义内核后缀（留空用设备配置的值，即伪装成原厂）'
+        description: '【6 输出】自定义内核后缀（留空用设备配置的值，即伪装成原厂）'
         required: false
         type: string
         default: ''
 
       output_boot_img:
-        description: '同时产出 boot.img'
+        description: '【6 输出】同时产出 boot.img'
         required: false
         type: boolean
         default: true
 
       ccache_reset:
-        description: '丢弃 ccache，强制冷编译'
+        description: '【6 维护】丢弃 ccache，强制冷编译'
         required: false
         type: boolean
         default: false
