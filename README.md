@@ -36,6 +36,30 @@
 
 ---
 
+## 输出产物说明
+
+构建成功后，Actions 会上传多个 artifact。它们不是“中间产物打成一个包”，而是按用途分开上传，方便按需要下载。
+
+> GitHub 的 `upload-artifact` 下载时会自动把 artifact 目录打成一个 zip。也就是说，页面上下载到的 zip 是 GitHub 自动生成的外层下载包；本项目不会再额外生成一层 AK3 zip，避免 zip 套 zip。
+
+| artifact 名称后缀 | 内容 | 是否包含本次编译后的内核 | 是否可直接刷入 | 说明 |
+|---|---|---|---|---|
+| `-AnyKernel3` | AnyKernel3 刷机包目录内容：`anykernel.sh`、AK3 脚本文件、本次编译出的 `Image`、`build-info.txt` 等 | 是 | 是 | 这是推荐下载的刷机包。下载到的 artifact zip 本身就是可刷 AK3 包，不是空模板，也不是“等待再手动放内核”的准备目录。刷入时 AK3 会读取设备当前 boot 镜像，只替换其中的 kernel/Image，通常不改 ramdisk。 |
+| `-Image` | 原始内核镜像文件 `Image` | 是 | 视工具而定 | 这是 `make` 后从 `common/out/arch/arm64/boot/Image` 导出的本次编译结果，不是手机原厂内核，也不是未修改源码。它已经包含所选的 SukiSU / SUSFS / Droidspaces / config 等改动。适合手动打包 boot.img、对比、或给支持直刷 Image 的工具使用。 |
+| `-boot` | 由本次 `Image` 生成的 `boot.img` | 是 | 是，需 bootloader 已解锁且机型匹配 | 这是用本次编译出的 `Image` 重新打包出来的 boot 镜像，不是从手机提取的原厂 boot.img。Android 13+ GKI boot 通常不含 ramdisk，本项目按 header v4 生成，并用测试密钥补 AVB hash footer，使镜像格式完整。 |
+| `-build-info` | `build-info.txt` | 否 | 否 | 构建信息记录文件，写明设备、源码 commit、SukiSU/SUSFS 版本、功能开关、构建器提交等。它也会复制进 `-AnyKernel3` 包内，方便刷机包离线追溯来源。 |
+| `-final-config` | 最终 `.config` | 否 | 否 | 这是 `make gki_defconfig` 后真正参与编译的最终内核配置，用于核对某个 `CONFIG_*` 是否实际生效。即使启用了 `config_data` 伪装，这个 artifact 仍是构建期真实配置，不是伪装后的 `/proc/config.gz` 显示内容。 |
+| `-patch-rejects` | 补丁冲突文件 `.rej` 及相关源码片段 | 否 | 否 | 只有补丁产生冲突时才上传，用于排查失败构建；成功构建通常没有这个 artifact。 |
+
+简单选择：
+
+- 日常刷机：下载 `-AnyKernel3`。
+- 想用 fastboot 或手动刷 boot 分区：下载 `-boot`。
+- 想自己重新打包或做底层对比：下载 `-Image`。
+- 想确认这次到底开了哪些功能：下载 `-build-info` 和 `-final-config`。
+
+---
+
 ## 构建选项
 
 Actions 的 `Run workflow` 参数按功能归类排列：先选基础目标，再选 SukiSU / SUSFS，随后是 Droidspaces、普通 config 增强、外部源码/补丁增强，最后才是输出与维护项。
