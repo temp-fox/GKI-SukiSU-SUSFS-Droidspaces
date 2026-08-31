@@ -230,8 +230,40 @@ fi
 
 if is_true "${ENABLE_NETWORK_EXT:-false}"; then
     log "网络扩展:"
-    need_y CONFIG_IP_SET "ipset 支持"
-    need_y CONFIG_NETFILTER_XT_SET "iptables -m set"
+    # 对齐 sm8650_kernel 的 newrealme Neo7 Turbo 6.1.115 flow 中 better_net 块。
+    for c in CONFIG_NETFILTER_XT_MATCH_ADDRTYPE \
+             CONFIG_NETFILTER_XT_SET \
+             CONFIG_IP_SET \
+             CONFIG_IP_SET_BITMAP_IP \
+             CONFIG_IP_SET_BITMAP_IPMAC \
+             CONFIG_IP_SET_BITMAP_PORT \
+             CONFIG_IP_SET_HASH_IP \
+             CONFIG_IP_SET_HASH_IPMARK \
+             CONFIG_IP_SET_HASH_IPPORT \
+             CONFIG_IP_SET_HASH_IPPORTIP \
+             CONFIG_IP_SET_HASH_IPPORTNET \
+             CONFIG_IP_SET_HASH_IPMAC \
+             CONFIG_IP_SET_HASH_MAC \
+             CONFIG_IP_SET_HASH_NETPORTNET \
+             CONFIG_IP_SET_HASH_NET \
+             CONFIG_IP_SET_HASH_NETNET \
+             CONFIG_IP_SET_HASH_NETPORT \
+             CONFIG_IP_SET_HASH_NETIFACE \
+             CONFIG_IP_SET_LIST_SET \
+             CONFIG_IP6_NF_NAT \
+             CONFIG_IP6_NF_TARGET_MASQUERADE; do
+        need_y "$c" "better_net 必要项"
+    done
+    if grep -q '^CONFIG_IP_SET_MAX=65534$' "$CFG"; then
+        printf '  [✓] %-45s\n' "CONFIG_IP_SET_MAX=65534"
+    else
+        printf '  [✗] %-45s ← %s\n' "CONFIG_IP_SET_MAX" "better_net 要求 65534"
+        printf '      实际: %s\n' \
+            "$(grep -E '^(# )?CONFIG_IP_SET_MAX[ =]' "$CFG" | head -1 || echo '该符号不在 .config 中')"
+        FAIL=1
+    fi
+    need_not_y CONFIG_NETFILTER_XT_MATCH_RECENT "不属于 better_net 专属配置"
+    need_not_y CONFIG_NETFILTER_XT_TARGET_LOG "不属于 better_net 专属配置"
 fi
 
 if is_true "${ENABLE_ZRAM:-false}"; then
@@ -301,5 +333,5 @@ ok "全部配置项校验通过"
 
 # 把关键配置打印出来存档，方便日后对照产物排查
 section "最终配置摘要"
-grep -E '^CONFIG_(KSU|KPM|ZRAM|REKERNEL|NTSYNC|BBG|PID_NS|IPC_NS|SYSVIPC|POSIX_MQUEUE|DEVTMPFS|USER_NS|NAMESPACES|IP_SET|TCP_CONG_BBR)' \
+grep -E '^CONFIG_(KSU|KPM|ZRAM|REKERNEL|NTSYNC|BBG|PID_NS|IPC_NS|SYSVIPC|POSIX_MQUEUE|DEVTMPFS|USER_NS|NAMESPACES|IP_SET|NETFILTER_XT|IP6_NF|TCP_CONG_BBR)' \
      "$CFG" | sort | sed 's/^/  /'

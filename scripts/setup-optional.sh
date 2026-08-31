@@ -258,7 +258,7 @@ fi
 #    这一项只堵 /proc/config.gz 这一个口子。
 # =============================================================================
 
-if is_true "${ENABLE_CONFIG_SPOOF:-false}"; then
+if is_true "${ENABLE_CONFIG_SPOOF:-false}" || is_true "${ENABLE_NETWORK_EXT:-false}"; then
     section "可选特性：config_data 伪装"
 
     apply_patch "$REPO_ROOT/patches/optional/config_data_spoof.patch" "$KERNEL_DIR" 1
@@ -271,9 +271,20 @@ if is_true "${ENABLE_CONFIG_SPOOF:-false}"; then
         warn "  伪装补丁虽已应用，但没有实际作用。"
     fi
 
-    # 要伪装的项。默认隐藏 root 方案本身的痕迹。
+    SPOOF_RULES=""
+
+    # root 痕迹伪装仍由 ENABLE_CONFIG_SPOOF 控制。
     # 可用 workflow 输入 config_spoof_rules 覆盖，格式 "符号=值" 空格分隔。
-    SPOOF_RULES="${CONFIG_SPOOF_RULES:-CONFIG_KSU=n CONFIG_KSU_SUSFS=n CONFIG_KPM=n}"
+    if is_true "${ENABLE_CONFIG_SPOOF:-false}"; then
+        SPOOF_RULES="${CONFIG_SPOOF_RULES:-CONFIG_KSU=n CONFIG_KSU_SUSFS=n CONFIG_KPM=n}"
+    fi
+
+    # CONFIG_IP6_NF_NAT=n 对齐 sm8650_kernel 的 better_net 流程：
+    # 实际内核仍启用 IPv6 NAT，只在网络扩展开启时把 config_data 里的显示值改成 n。
+    if is_true "${ENABLE_NETWORK_EXT:-false}" \
+       && ! [[ " $SPOOF_RULES " == *" CONFIG_IP6_NF_NAT="* ]]; then
+        SPOOF_RULES="${SPOOF_RULES:+$SPOOF_RULES }CONFIG_IP6_NF_NAT=n"
+    fi
 
     log "伪装规则: $SPOOF_RULES"
     put_env KERNEL_CONFIG_SPOOF "$SPOOF_RULES"
