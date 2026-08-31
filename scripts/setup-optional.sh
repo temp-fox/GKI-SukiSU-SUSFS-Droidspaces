@@ -194,7 +194,9 @@ fi
 if is_true "${ENABLE_BBG:-false}"; then
     section "可选特性：基带保护 BBG"
 
-    if [ -d "$KERNEL_DIR/security/baseband_guard" ]; then
+    BBG_SRC_DIR="$KERNEL_DIR/security/baseband-guard"
+
+    if [ -d "$BBG_SRC_DIR" ]; then
         skip "BBG 已集成"
     else
         log "运行上游 setup.sh"
@@ -203,7 +205,7 @@ if is_true "${ENABLE_BBG:-false}"; then
              -o /tmp/bbg-setup.sh || die "无法下载 BBG setup.sh"
         [ -s /tmp/bbg-setup.sh ] || die "下载到的 BBG setup.sh 是空文件"
         ( cd "$KERNEL_DIR" && bash /tmp/bbg-setup.sh ) || die "BBG setup.sh 执行失败"
-        require_dir "$KERNEL_DIR/security/baseband_guard" "BBG 源码"
+        require_dir "$BBG_SRC_DIR" "BBG 源码"
     fi
 
     # 把 baseband_guard 加进 LSM 默认启用串。
