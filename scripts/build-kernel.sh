@@ -222,13 +222,41 @@ if [ -n "$VERSION_STR" ]; then
     ok "版本串: $VERSION_STR"
     put_env KERNEL_VERSION_STRING "$VERSION_STR"
 
-    # 版本伪装校验：设备配置声明了后缀，产物里就应该有
-    if [ -n "${FINAL_LOCALVERSION:-}" ] \
-       && ! grep -qF "$FINAL_LOCALVERSION" <<< "$VERSION_STR"; then
-        warn "版本串里没有预期的后缀 '$FINAL_LOCALVERSION'"
-        warn "  版本伪装可能没生效，刷入后 uname -r 会与原厂不一致"
+    if [ -n "${EXPECTED_KERNEL_VERSION_STRING:-}" ]; then
+        if [ "$VERSION_STR" != "$EXPECTED_KERNEL_VERSION_STRING" ]; then
+            die "Image 内完整 Linux version 与原厂不一致。
+     期望: $EXPECTED_KERNEL_VERSION_STRING
+     实际: $VERSION_STR"
+        fi
+        ok "完整版本串已与原厂一致"
+        put_env KERNEL_VERSION_STRING_MATCH "true"
+    else
+        # 版本伪装校验：设备配置声明了后缀，产物里就应该有
+        if [ -n "${FINAL_LOCALVERSION:-}" ] \
+           && ! grep -qF "$FINAL_LOCALVERSION" <<< "$VERSION_STR"; then
+            warn "版本串里没有预期的后缀 '$FINAL_LOCALVERSION'"
+            warn "  版本伪装可能没生效，刷入后 uname -r 会与原厂不一致"
+        fi
+
+        if [ -n "${FAKE_BUILD_TIME:-}" ] \
+           && ! grep -qF "$FAKE_BUILD_TIME" <<< "$VERSION_STR"; then
+            warn "版本串里没有预期的构建时间 '$FAKE_BUILD_TIME'"
+        fi
+
+        if [ -n "${KBUILD_BUILD_USER:-}" ] && [ -n "${KBUILD_BUILD_HOST:-}" ] \
+           && ! grep -qF "(${KBUILD_BUILD_USER}@${KBUILD_BUILD_HOST})" <<< "$VERSION_STR"; then
+            warn "版本串里没有预期的构建身份 '${KBUILD_BUILD_USER}@${KBUILD_BUILD_HOST}'"
+        fi
+
+        if [ -n "${KERNEL_COMPILER_STRING:-}" ] \
+           && ! grep -qF "($KERNEL_COMPILER_STRING)" <<< "$VERSION_STR"; then
+            warn "版本串里没有预期的 compiler 字符串"
+        fi
     fi
 else
+    if [ -n "${EXPECTED_KERNEL_VERSION_STRING:-}" ]; then
+        die "无法从 Image 中读出 Linux version，不能校验是否与原厂一致"
+    fi
     warn "无法从 Image 中读出版本串"
 fi
 

@@ -148,19 +148,79 @@ fi
 put_env KBUILD_BUILD_TIMESTAMP "$DATESTR"
 put_env KBUILD_BUILD_VERSION   "1"
 
-# mkcompile_h 会把时间戳编进 UTS_VERSION。
-# KBUILD_BUILD_TIMESTAMP 环境变量在多数情况下够用，
-# 但保险起见直接改脚本，确保 "#1 SMP PREEMPT" 前缀也一致。
+# --- 构建身份与 compiler banner（影响 /proc/version）------------------------
+
+for value_name in KBUILD_BUILD_USER KBUILD_BUILD_HOST KERNEL_COMPILER_STRING EXPECTED_KERNEL_VERSION_STRING; do
+    value="${!value_name:-}"
+    case "$value" in
+        *$'\n'*|*$'\r'*) die "$value_name 不能包含换行" ;;
+    esac
+done
+
+if [ -n "${EXPECTED_KERNEL_VERSION_STRING:-}" ] \
+   && { [ -z "${KBUILD_BUILD_USER:-}" ] || [ -z "${KBUILD_BUILD_HOST:-}" ]; }; then
+    die "已配置 EXPECTED_KERNEL_VERSION_STRING，但 KBUILD_BUILD_USER / KBUILD_BUILD_HOST 不完整，无法精确复现原厂 Linux version"
+fi
+
+if [ -n "${KBUILD_BUILD_USER:-}" ]; then
+    [[ "$KBUILD_BUILD_USER" != *"@"* ]] || warn "KBUILD_BUILD_USER 含 @，可能让 /proc/version 的 user@host 格式异常"
+    put_env KBUILD_BUILD_USER "$KBUILD_BUILD_USER"
+fi
+
+if [ -n "${KBUILD_BUILD_HOST:-}" ]; then
+    [[ "$KBUILD_BUILD_HOST" != *"@"* ]] || warn "KBUILD_BUILD_HOST 含 @，可能让 /proc/version 的 user@host 格式异常"
+    put_env KBUILD_BUILD_HOST "$KBUILD_BUILD_HOST"
+fi
+
+if [ -n "${KERNEL_COMPILER_STRING:-}" ]; then
+    put_env KERNEL_COMPILER_STRING "$KERNEL_COMPILER_STRING"
+fi
+
+if [ -n "${EXPECTED_KERNEL_VERSION_STRING:-}" ]; then
+    put_env EXPECTED_KERNEL_VERSION_STRING "$EXPECTED_KERNEL_VERSION_STRING"
+fi
+
+# mkcompile_h 会把时间戳、构建身份和 compiler 字符串编进 compile.h。
+# KBUILD_BUILD_TIMESTAMP / USER / HOST 是内核原生入口；这里继续定点修
+# UTS_VERSION 和 LINUX_COMPILER，确保最终 Image 的 Linux version 与原厂一致。
 MKCOMPILE="scripts/mkcompile_h"
-if [ -f "$MKCOMPILE" ] && [ -n "${FAKE_BUILD_TIME:-}" ]; then
-    if grep -q 'UTS_VERSION=' "$MKCOMPILE"; then
-        perl -pi -e "s{UTS_VERSION=\"\\\$\\\(.*?\\\)\"}{UTS_VERSION=\"#1 SMP PREEMPT $DATESTR\"}" \
-            "$MKCOMPILE"
-        assert_contains "$MKCOMPILE" "#1 SMP PREEMPT $DATESTR" "mkcompile_h 时间戳替换"
-        ok "已固定 mkcompile_h 的 UTS_VERSION"
-    else
-        warn "mkcompile_h 结构不符合预期，仅依赖 KBUILD_BUILD_TIMESTAMP"
+if [ -f "$MKCOMPILE" ]; then
+    if [ -n "${FAKE_BUILD_TIME:-}" ]; then
+        if grep -q 'UTS_VERSION=' "$MKCOMPILE"; then
+            perl -pi -e "s{UTS_VERSION=\"\\\$\\\(.*?\\\)\"}{UTS_VERSION=\"#1 SMP PREEMPT $DATESTR\"}" \
+                "$MKCOMPILE"
+            assert_contains "$MKCOMPILE" "#1 SMP PREEMPT $DATESTR" "mkcompile_h 时间戳替换"
+            ok "已固定 mkcompile_h 的 UTS_VERSION"
+        else
+            die "mkcompile_h 结构不符合预期，无法固定 UTS_VERSION"
+        fi
     fi
+
+    if [ -n "${KERNEL_COMPILER_STRING:-}" ]; then
+        KERNEL_COMPILER_STRING="$KERNEL_COMPILER_STRING" python3 - "$MKCOMPILE" <<'PY'
+from pathlib import Path
+import os
+import re
+import shlex
+import sys
+
+p = Path(sys.argv[1])
+compiler = os.environ["KERNEL_COMPILER_STRING"]
+data = p.read_text()
+pattern = re.compile(r"^LINUX_COMPILER=.*$", re.MULTILINE)
+matches = list(pattern.finditer(data))
+if len(matches) != 1:
+    raise SystemExit(f"LINUX_COMPILER 赋值行数量异常：{len(matches)}")
+replacement = "LINUX_COMPILER=" + shlex.quote(compiler)
+data = pattern.sub(replacement, data, count=1)
+p.write_text(data)
+PY
+        assert_contains "$MKCOMPILE" "$KERNEL_COMPILER_STRING" "mkcompile_h compiler 字符串替换"
+        ok "已固定 mkcompile_h 的 LINUX_COMPILER"
+    fi
+else
+    [ -z "${FAKE_BUILD_TIME:-}${KERNEL_COMPILER_STRING:-}" ] \
+        || die "找不到 scripts/mkcompile_h，无法固定 UTS_VERSION / LINUX_COMPILER"
 fi
 
 # =============================================================================

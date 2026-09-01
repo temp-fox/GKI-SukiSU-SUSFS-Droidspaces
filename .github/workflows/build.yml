@@ -264,6 +264,8 @@ jobs:
                    SOURCE_MANIFEST_BRANCH SOURCE_UNZIP_DIR \
                    ANDROID_VERSION KERNEL_VERSION KERNEL_SUBLEVEL \
                    KMI_GENERATION KERNEL_LOCALVERSION FAKE_BUILD_TIME \
+                   KBUILD_BUILD_USER KBUILD_BUILD_HOST \
+                   KERNEL_COMPILER_STRING EXPECTED_KERNEL_VERSION_STRING \
                    NEEDS_VENDOR_STUBS NEEDS_OPLUS_MIDAS_FIX \
                    DEFAULT_KABI_SLOTS CLANG_VERSION TOOLCHAIN_URL \
                    BUILD_TOOLS_URL EXTRA_CONFIG_FRAGMENTS \
@@ -310,6 +312,8 @@ jobs:
             NTsync        : ${{ inputs.enable_ntsync }}
             BBG           : ${{ inputs.enable_bbg }}
             config 伪装   : ${{ inputs.enable_config_spoof }}
+            构建身份      : ${KBUILD_BUILD_USER:-未指定}@${KBUILD_BUILD_HOST:-未指定}
+            完整版本校验  : $([ -n "${EXPECTED_KERNEL_VERSION_STRING:-}" ] && echo true || echo false)
             调试产物      : ${{ inputs.output_debug_artifacts }}
             特性 hash     : $FEATURE_HASH
           ================================================================

@@ -23,6 +23,10 @@ uname -v
 #                    └────────┬─────────────┘
 #                             这部分就是 FAKE_BUILD_TIME
 
+# 完整版本串 —— 决定 KBUILD_BUILD_USER / KBUILD_BUILD_HOST /
+# KERNEL_COMPILER_STRING / EXPECTED_KERNEL_VERSION_STRING
+cat /proc/version
+
 # 主板代号
 getprop ro.product.board
 
@@ -30,8 +34,11 @@ getprop ro.product.board
 getprop ro.build.version.incremental
 ```
 
-`KERNEL_LOCALVERSION` 和 `FAKE_BUILD_TIME` 只影响「产物看起来像不像原厂」，
-填错不影响能否开机，但会让 `uname` 输出与原厂不一致。
+`KERNEL_LOCALVERSION`、`FAKE_BUILD_TIME`、`KBUILD_BUILD_USER`、`KBUILD_BUILD_HOST`
+和 `KERNEL_COMPILER_STRING` 只影响「产物看起来像不像原厂」，填错不影响能否开机，
+但会让 `uname` / `/proc/version` 输出与原厂不一致。若已拿到原厂完整
+`Linux version ...` 行，建议填入 `EXPECTED_KERNEL_VERSION_STRING`，构建脚本会用最终
+Image 做严格校验。
 
 ---
 
