@@ -142,6 +142,7 @@ KSU_SHA="$(git rev-parse HEAD)"
 KSU_SHORT="$(git rev-parse --short=8 HEAD)"
 KSU_BRANCH="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "$KSU_REF")"
 KSU_DATE="$(git log -1 --date=format:'%Y-%m-%d %H:%M:%S' --format='%cd')"
+KSU_TAG="$(git describe --tags --abbrev=0 2>/dev/null || echo '')"
 
 ok "SukiSU: $KSU_SHORT @ $KSU_BRANCH （最后提交 $KSU_DATE）"
 
@@ -300,12 +301,48 @@ done
 [ -n "$COMMIT_COUNT" ] || die "git commit 计数失败（main 和 HEAD 都取不到合理值）。
      这会让 KSU_VERSION 落到兜底值 13000，管理器报版本不匹配。"
 
+FORMULA_KSU_VERSION=$(( VERSION_BASE + COMMIT_COUNT - VERSION_OFFSET ))
+
 if [ -n "${KSU_VERSION_OVERRIDE:-}" ]; then
     KSU_VERSION="$KSU_VERSION_OVERRIDE"
     warn "使用手工指定的 KSU_VERSION=$KSU_VERSION（覆盖推导值）"
 else
-    KSU_VERSION=$(( VERSION_BASE + COMMIT_COUNT - VERSION_OFFSET ))
-    ok "推导: $VERSION_BASE + $COMMIT_COUNT - $VERSION_OFFSET = $KSU_VERSION"
+    # SukiSU Manager 的 versionCode 与内核 KSU_VERSION 必须一致。
+    #
+    # 注意：直接用当前分支 HEAD 的 commit count 会在上游刚发布 tag 后继续前进时
+    # 得到比 release APK 更高的版本号。例如 v4.2.0 release APK 是 40900，
+    # 但 builtin/main 随后多一个提交会让公式推到 40901，刷入后管理器报
+    #「管理器版本 40900 和驱动版本 40901 不匹配」。
+    #
+    # 因此默认优先按当前 SukiSU 语义版本（tag 或 Kbuild VERSION_TAG）查询官方
+    # release 资产名 SukiSU_vX.Y.Z_<versionCode>_releases.apk，并用该
+    # versionCode 对齐内核驱动；查不到 release APK 时才回退到源码公式。
+    RELEASE_VERSION="$(grep -oP '^VERSION_TAG\s*:?=\s*\$\(or \$\(KSU_GITHUB_VER\),\$\(git_latest_tag\),\K[^)[:space:]]+' "$KBUILD" | head -1 || true)"
+    if [ -z "$RELEASE_VERSION" ]; then
+        RELEASE_VERSION="${KSU_TAG#v}"
+    fi
+
+    RELEASE_KSU_VERSION=""
+    if [ -n "$RELEASE_VERSION" ] && command -v curl >/dev/null 2>&1; then
+        API_URL="https://api.github.com/repos/SukiSU-Ultra/SukiSU-Ultra/releases/tags/v${RELEASE_VERSION}"
+        log "查询 SukiSU 官方 release v${RELEASE_VERSION} 的 Manager versionCode"
+        RELEASE_JSON="$(curl -fsSL --retry 3 "$API_URL" 2>/dev/null || true)"
+        if [ -n "$RELEASE_JSON" ]; then
+            RELEASE_KSU_VERSION="$(printf '%s' "$RELEASE_JSON" \
+                | grep -oE "SukiSU_v${RELEASE_VERSION//./\\.}_[0-9]+_releases\\.apk" \
+                | grep -oE '_[0-9]+_' \
+                | tr -d '_' \
+                | head -1 || true)"
+        fi
+    fi
+
+    if [ -n "$RELEASE_KSU_VERSION" ]; then
+        KSU_VERSION="$RELEASE_KSU_VERSION"
+        ok "按官方 Manager release 对齐 KSU_VERSION=$KSU_VERSION（源码公式为 $FORMULA_KSU_VERSION）"
+    else
+        KSU_VERSION="$FORMULA_KSU_VERSION"
+        warn "未能从官方 release 解析 Manager versionCode，回退源码公式: $VERSION_BASE + $COMMIT_COUNT - $VERSION_OFFSET = $KSU_VERSION"
+    fi
 fi
 
 # 管理器的硬门槛。低于它刷完机就是「管理器版本 X 和驱动版本 Y 不匹配」。
@@ -316,7 +353,6 @@ MIN_KSU_VERSION=32513
      实在需要手工指定，用 ksu_version_override 输入项。"
 
 # 语义版本：管理器还会检查 KSU_VERSION_FULL 是否 >= v4.0.0
-KSU_TAG="$(git describe --tags --abbrev=0 2>/dev/null || echo '')"
 if [ -n "$KSU_TAG" ]; then
     KSU_VERSION_FULL="${KSU_TAG}-${KSU_SHORT}@${KSU_BRANCH}"
     TAG_MAJOR="$(echo "${KSU_TAG#v}" | cut -d. -f1)"
