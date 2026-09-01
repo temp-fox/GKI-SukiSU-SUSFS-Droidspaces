@@ -224,6 +224,44 @@ else
     skip "当前 SukiSU 不需要 sulog USER_ARG_NULL 修正"
 fi
 
+KERNEL_UMOUNT="$WORKSPACE/KernelSU/kernel/feature/kernel_umount.c"
+if [ -f "$KERNEL_UMOUNT" ] \
+   && grep -qF '.set_handler = kernel_umount_feature_set,' "$KERNEL_UMOUNT" \
+   && ! grep -qE 'static[[:space:]]+int[[:space:]]+kernel_umount_feature_set[[:space:]]*\(' "$KERNEL_UMOUNT"; then
+    warn "当前 SukiSU kernel_umount.c 引用了 kernel_umount_feature_set，但没有定义；自动补齐上游 KernelSU 的 setter"
+    python3 - "$KERNEL_UMOUNT" <<'PY'
+from pathlib import Path
+import sys
+
+p = Path(sys.argv[1])
+data = p.read_text()
+needle = '''static int kernel_umount_feature_get(u64 *value)
+{
+    *value = ksu_kernel_umount_enabled ? 1 : 0;
+    return 0;
+}
+'''
+insert = needle + '''
+static int kernel_umount_feature_set(u64 value)
+{
+    bool enable = value != 0;
+    ksu_kernel_umount_enabled = enable;
+    pr_info("kernel_umount: set to %d\\n", enable);
+    return 0;
+}
+'''
+if 'static int kernel_umount_feature_set(u64 value)' in data:
+    raise SystemExit(0)
+if needle not in data:
+    raise SystemExit('无法定位 kernel_umount_feature_get()，不能安全插入 kernel_umount_feature_set()')
+p.write_text(data.replace(needle, insert, 1))
+PY
+    assert_contains "$KERNEL_UMOUNT" 'static int kernel_umount_feature_set(u64 value)' "SukiSU kernel_umount setter 补丁"
+    ok "已补齐 SukiSU kernel_umount_feature_set"
+elif [ -f "$KERNEL_UMOUNT" ]; then
+    skip "当前 SukiSU kernel_umount.c 不需要 setter 兼容修正"
+fi
+
 # -----------------------------------------------------------------------------
 # 5. 推导并校验 KSU_VERSION
 #
