@@ -192,7 +192,7 @@ if [ -f "$MKCOMPILE" ]; then
             assert_contains "$MKCOMPILE" "#1 SMP PREEMPT $DATESTR" "mkcompile_h 时间戳替换"
             ok "已固定 mkcompile_h 的 UTS_VERSION"
         else
-            die "mkcompile_h 结构不符合预期，无法固定 UTS_VERSION"
+            warn "mkcompile_h 不直接生成 UTS_VERSION，仅依赖 KBUILD_BUILD_TIMESTAMP / KBUILD_BUILD_VERSION"
         fi
     fi
 
@@ -207,12 +207,27 @@ import sys
 p = Path(sys.argv[1])
 compiler = os.environ["KERNEL_COMPILER_STRING"]
 data = p.read_text()
-pattern = re.compile(r"^LINUX_COMPILER=.*$", re.MULTILINE)
-matches = list(pattern.finditer(data))
-if len(matches) != 1:
-    raise SystemExit(f"LINUX_COMPILER 赋值行数量异常：{len(matches)}")
-replacement = "LINUX_COMPILER=" + shlex.quote(compiler)
-data = pattern.sub(replacement, data, count=1)
+
+assignment = re.compile(r"^LINUX_COMPILER=.*$", re.MULTILINE)
+assignment_matches = list(assignment.finditer(data))
+if len(assignment_matches) == 1:
+    data = assignment.sub("LINUX_COMPILER=" + shlex.quote(compiler), data, count=1)
+else:
+    define = re.compile(r'^(#define[ \t]+LINUX_COMPILER[ \t]+)".*"$', re.MULTILINE)
+    define_matches = list(define.finditer(data))
+    if len(define_matches) != 1:
+        raise SystemExit(
+            f"无法定位唯一的 LINUX_COMPILER 生成点："
+            f"assignment={len(assignment_matches)} define={len(define_matches)}"
+        )
+    escaped = compiler.translate(str.maketrans({
+        "\\": "\\\\",
+        '"': '\\"',
+        "$": "\\$",
+        "`": "\\`",
+    }))
+    data = define.sub(r'\1"' + escaped + '"', data, count=1)
+
 p.write_text(data)
 PY
         assert_contains "$MKCOMPILE" "$KERNEL_COMPILER_STRING" "mkcompile_h compiler 字符串替换"
